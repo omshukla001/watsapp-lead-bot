@@ -13,27 +13,33 @@ const REQUIRED_FIELDS = [
   'summary',
 ];
 
-/**
- * Extract the first JSON object from an arbitrary string.
- * Strips markdown fences and stray prose before/after the object.
- */
 function extractJSON(raw) {
   if (!raw || typeof raw !== 'string') return null;
 
-  let text = raw.trim();
-  // Strip ```json ... ``` or ``` ... ``` fences
-  text = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  let text = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
 
   const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) return null;
+  if (start === -1) return null;
 
-  const candidate = text.slice(start, end + 1);
-  try {
-    return JSON.parse(candidate);
-  } catch (_) {
-    return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) { escape = false; continue; }
+    if (ch === '\\') { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        try { return JSON.parse(text.slice(start, i + 1)); }
+        catch (_) { return null; }
+      }
+    }
   }
+  return null;
 }
 
 /**

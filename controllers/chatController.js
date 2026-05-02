@@ -1,7 +1,6 @@
 const Session = require('../models/sessionModel');
 const Lead = require('../models/leadModel');
 const aiService = require('../services/aiService');
-const { detectLanguage } = require('../services/languageService');
 const { extractJSON, validateLead, scoreLead } = require('../utils/parser');
 const { notifyNewLead } = require('../services/termuxNotify');
 const { isYes, isNo, mentionsCall } = require('../services/maturityDetector');
@@ -156,8 +155,27 @@ const FALLBACK_QUESTIONS = {
   },
 };
 
+const LANG_PICK_STEP = -1; // pre-greeting: user must pick language
 const LAST_AI_STEP = 7; // step 7 (name) is the last question the AI handles
 const CALL_STEP = 8;
+
+const LANGUAGE_PICKER_TEXT =
+  'Welcome! 👋\n' +
+  'स्वागत है! 🙏\n\n' +
+  'Please choose your language to continue:\n' +
+  'कृपया अपनी भाषा चुनें:\n\n' +
+  '1️⃣  English\n' +
+  '2️⃣  हिन्दी\n\n' +
+  '_Reply with 1 or 2_';
+
+const LANGUAGE_PICKER_OPTIONS = ['English', 'हिन्दी'];
+
+function parseLanguagePick(message) {
+  const m = String(message || '').trim().toLowerCase();
+  if (/^(1|1️⃣|english|eng|e|angrezi|अंग्रेजी|english\.?)$/i.test(m)) return 'ENGLISH';
+  if (/^(2|2️⃣|hindi|hin|h|हिंदी|हिन्दी|हिन्दि)$/i.test(m)) return 'HINDI';
+  return null;
+}
 
 function captureFallbackAnswer(session, message) {
   const text = String(message || '').trim();
@@ -351,19 +369,26 @@ async function finalizeLead(session) {
   session.last_options = [];
   session.history.push({ role: 'assistant', content: reply });
 
-  await Lead.findOneAndUpdate(
-    { phone_number: finalLead.phone_number },
-    { ...finalLead, language_mode: session.language_mode },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
-  );
+  try {
+    await Lead.findOneAndUpdate(
+      { phone_number: finalLead.phone_number },
+      { ...finalLead, language_mode: session.language_mode },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  } catch (err) {
+    logger.error(`Lead save failed for ${finalLead.phone_number}: ${err.message}`);
+  }
 
-  // eslint-disable-next-line no-console
   console.log('\n======== NEW QUALIFIED LEAD ========');
   console.log(JSON.stringify(finalLead, null, 2));
   console.log('====================================\n');
-  notifyNewLead(finalLead);
+  try { notifyNewLead(finalLead); } catch (_) {}
 
-  await session.save();
+  try {
+    await session.save();
+  } catch (err) {
+    logger.error(`Session save failed for ${session.phone_number}: ${err.message}`);
+  }
 
   return {
     reply,
@@ -377,22 +402,104 @@ async function finalizeLead(session) {
   };
 }
 
+// Per-phone async queue: serializes message processing for the same user so
+// rapid back-to-back messages can't double-write the session document.
+const phoneLocks = new Map();
+
 async function processMessage(phone_number, rawMessage) {
+  const previous = phoneLocks.get(phone_number) || Promise.resolve();
+  const next = previous
+    .catch(() => {}) // never let a failed prior turn block the next one
+    .then(() => processMessageInner(phone_number, rawMessage));
+
+  phoneLocks.set(phone_number, next);
+
+  try {
+    return await next;
+  } finally {
+    if (phoneLocks.get(phone_number) === next) {
+      phoneLocks.delete(phone_number);
+    }
+  }
+}
+
+async function processMessageInner(phone_number, rawMessage) {
   let session = await Session.findOne({ phone_number });
   const isFirstTurn = !session;
 
+  // First contact — send bilingual language picker, do not run AI yet
   if (!session) {
     session = new Session({
       phone_number,
-      language_mode: detectLanguage(rawMessage),
-      current_step: 0,
+      language_mode: 'ENGLISH',
+      current_step: LANG_PICK_STEP,
       partial_lead: {},
       history: [],
-      last_options: [],
+      last_options: LANGUAGE_PICKER_OPTIONS,
       wants_call: false,
     });
-  } else if (session.history.length <= 1) {
-    session.language_mode = detectLanguage(rawMessage) || session.language_mode;
+    session.history.push({ role: 'user', content: rawMessage });
+    session.history.push({ role: 'assistant', content: LANGUAGE_PICKER_TEXT });
+    session.last_user_message_at = new Date();
+    await session.save();
+    logger.info(`New session [${phone_number}] — sent language picker`);
+    return {
+      reply: LANGUAGE_PICKER_TEXT,
+      options: LANGUAGE_PICKER_OPTIONS,
+      optionSections: null,
+      complete: false,
+      language_mode: 'ENGLISH',
+      current_step: LANG_PICK_STEP,
+      lead: null,
+      is_mature: false,
+    };
+  }
+
+  // Awaiting language pick — handle "1"/"2"/"english"/"hindi", else re-prompt
+  if (session.current_step === LANG_PICK_STEP) {
+    const picked = parseLanguagePick(rawMessage);
+    session.history.push({ role: 'user', content: rawMessage });
+    session.last_user_message_at = new Date();
+    session.followup_count = 0;
+    session.last_followup_at = null;
+
+    if (!picked) {
+      session.history.push({ role: 'assistant', content: LANGUAGE_PICKER_TEXT });
+      session.last_options = LANGUAGE_PICKER_OPTIONS;
+      await session.save();
+      logger.info(`Language pick unrecognized [${phone_number}]: "${rawMessage}" — re-prompting`);
+      return {
+        reply: LANGUAGE_PICKER_TEXT,
+        options: LANGUAGE_PICKER_OPTIONS,
+        optionSections: null,
+        complete: false,
+        language_mode: session.language_mode,
+        current_step: LANG_PICK_STEP,
+        lead: null,
+        is_mature: false,
+      };
+    }
+
+    session.language_mode = picked;
+    session.current_step = 1;
+    const table = FALLBACK_QUESTIONS[picked] || FALLBACK_QUESTIONS.ENGLISH;
+    const reply = `${table[0]}\n\n${table[1]}`;
+    const options = optionsForStep(1, picked);
+    const optionSections = sectionsForStep(1);
+    session.history.push({ role: 'assistant', content: reply });
+    session.last_options = options;
+    await session.save();
+    logger.info(`Language picked [${phone_number}]: ${picked}`);
+    return {
+      reply,
+      options,
+      optionSections,
+      complete: false,
+      language_mode: picked,
+      current_step: 1,
+      lead: null,
+      is_mature: false,
+    };
   }
 
   // Map numeric reply ("1", "11", ...) to option text the bot offered last
@@ -430,7 +537,14 @@ async function processMessage(phone_number, rawMessage) {
 
     reply = String(parsed.reply || '').trim();
     const previousStep = session.current_step || 0;
-    if (Number.isInteger(parsed.next_step)) session.current_step = parsed.next_step;
+    if (Number.isInteger(parsed.next_step)) {
+      const proposed = parsed.next_step;
+      const allowed = Math.min(Math.max(proposed, previousStep), previousStep + 1);
+      if (proposed !== allowed) {
+        logger.warn(`AI proposed next_step=${proposed} from prev=${previousStep}; clamped to ${allowed}`);
+      }
+      session.current_step = allowed;
+    }
     session.partial_lead = mergePartialLead(session.partial_lead || {}, parsed.extracted);
 
     const finishedAllAIQs = parsed.complete === true || previousStep >= LAST_AI_STEP;

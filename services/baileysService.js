@@ -43,78 +43,21 @@ function extractText(message) {
   ).trim();
 }
 
-/**
- * Build a numbered text fallback that always works, even on WhatsApp clients
- * that won't render interactive list/button messages.
- */
-function buildOptionText(reply, options) {
-  if (!options || options.length === 0) return reply;
-  const numbered = options.map((o, i) => `${i + 1}. ${o}`).join('\n');
-  return `${reply}\n\n${numbered}\n\n_(Reply with a number or type your own answer)_`;
+const EMOJI_DIGITS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+
+function numberPrefix(i) {
+  return EMOJI_DIGITS[i] || `${i + 1}.`;
 }
 
-async function sendReply(jid, reply, options, optionSections) {
+function buildOptionText(reply, options) {
+  if (!options || options.length === 0) return reply;
+  const numbered = options.map((o, i) => `${numberPrefix(i)}  ${o}`).join('\n');
+  return `${reply}\n\n${numbered}\n\n_Reply with a number or type your own answer_`;
+}
+
+async function sendReply(jid, reply, options) {
   if (!sock) return;
-
   const text = buildOptionText(reply, options);
-
-  // 2-3 options: try native buttons
-  if (options && options.length >= 2 && options.length <= 3) {
-    try {
-      const buttons = options.map((o, i) => ({
-        buttonId: `opt_${i + 1}`,
-        buttonText: { displayText: o },
-        type: 1,
-      }));
-      await sock.sendMessage(jid, {
-        text,
-        footer: 'Tap an option or type your reply',
-        buttons,
-        headerType: 1,
-      });
-      return;
-    } catch (e) {
-      logger.debug(`Buttons failed, falling back: ${e.message}`);
-    }
-  }
-
-  // 4+ options: list message with sections (multi-section if controller provided them)
-  if (options && options.length >= 4) {
-    try {
-      const sections = optionSections && optionSections.length
-        ? optionSections.map((sec) => ({
-            title: sec.title,
-            rows: sec.items.map((item) => {
-              const idx = options.indexOf(item);
-              return {
-                title: item,
-                rowId: `opt_${idx >= 0 ? idx + 1 : 0}`,
-              };
-            }),
-          }))
-        : [
-            {
-              title: 'Options',
-              rows: options.map((o, i) => ({
-                title: o,
-                rowId: `opt_${i + 1}`,
-              })),
-            },
-          ];
-
-      await sock.sendMessage(jid, {
-        text,
-        footer: 'Tap to choose or type your answer',
-        title: 'Choose an option',
-        buttonText: 'Tap to choose',
-        sections,
-      });
-      return;
-    } catch (e) {
-      logger.debug(`List msg failed, falling back to plain text: ${e.message}`);
-    }
-  }
-
   await sock.sendMessage(jid, { text });
 }
 
@@ -202,9 +145,8 @@ async function startBaileys() {
 
         const reply = result?.reply || '';
         const options = result?.options || [];
-        const optionSections = result?.optionSections || null;
         if (reply) {
-          await sendReply(jid, reply, options, optionSections);
+          await sendReply(jid, reply, options);
           logger.info(`WA OUT [${phone}]: ${reply.replace(/\n/g, ' | ')}`);
         }
       } catch (err) {
