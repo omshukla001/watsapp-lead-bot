@@ -69,4 +69,30 @@ function mentionsCall(text) {
   return CALL_KEYWORDS.some((kw) => t.includes(kw));
 }
 
-module.exports = { isYes, isNo, mentionsCall };
+const PRICE_KEYWORDS = [
+  // English
+  'price', 'fee', 'fees', 'cost', 'amount', 'charge', 'charges', 'tuition',
+  'how much', 'how much will', 'how much does', 'expensive', 'affordable',
+  'rupees', 'rs.', 'rs ', 'inr', 'lakh', 'lakhs', 'lac', 'lacs', 'crore',
+  'package', 'total cost', 'expense', 'budget',
+  // Hinglish (latin script)
+  'kitna', 'kitne', 'kitni', 'kitnay', 'kitnaa', 'kitne paise', 'kitna paisa',
+  'paise kitne', 'paise kitna', 'kitna lagega', 'kitne lagega', 'kitna lagta',
+  'kharcha', 'kharch', 'kitna kharch', 'kharcha kitna',
+  'fees kitni', 'fees kitna', 'fees kya', 'fee kitni', 'fee kya',
+  'price kya', 'price kitna', 'rate kya', 'cost kya', 'amount kya',
+  'paisa lagega', 'paise lagenge',
+  // Hindi (Devanagari)
+  'कीमत', 'फीस', 'फ़ीस', 'दाम', 'खर्च', 'खर्चा',
+  'कितना', 'कितने', 'कितनी', 'कितना लगेगा', 'कितने पैसे',
+  'कितना खर्च', 'खर्चा कितना', 'पैसे कितने',
+  'लाख', 'रुपये', 'रूपए', 'रूपये',
+];
+
+function mentionsPrice(text) {
+  const t = normalize(text);
+  if (!t) return false;
+  return PRICE_KEYWORDS.some((kw) => t.includes(kw));
+}
+
+module.exports = { isYes, isNo, mentionsCall, mentionsPrice };

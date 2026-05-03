@@ -24,6 +24,11 @@ const leadSchema = new mongoose.Schema(
     interest_level: { type: String, enum: ['HIGH', 'MEDIUM', 'LOW', ''], default: '' },
     interest_signals: { type: [String], default: [] },
     is_mature: { type: Boolean, default: false, index: true },
+
+    // --- Price inquiry (high-priority signal: student asked about cost/fees) ---
+    price_inquiry: { type: Boolean, default: false, index: true },
+    price_inquiry_at: { type: Date },
+    price_inquiry_count: { type: Number, default: 0 },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

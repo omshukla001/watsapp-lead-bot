@@ -3,7 +3,7 @@ const Lead = require('../models/leadModel');
 const aiService = require('../services/aiService');
 const { extractJSON, validateLead, scoreLead } = require('../utils/parser');
 const { notifyNewLead } = require('../services/termuxNotify');
-const { isYes, isNo, mentionsCall } = require('../services/maturityDetector');
+const { isYes, isNo, mentionsCall, mentionsPrice } = require('../services/maturityDetector');
 const { score: scoreInterest } = require('../services/interestScorer');
 const logger = require('../utils/logger');
 
@@ -158,6 +158,21 @@ const FALLBACK_QUESTIONS = {
 const LANG_PICK_STEP = -1; // pre-greeting: user must pick language
 const LAST_AI_STEP = 7; // step 7 (name) is the last question the AI handles
 const CALL_STEP = 8;
+
+const PRICE_DEFLECTION = {
+  ENGLISH:
+    "📞 About fees — those depend on your category, branch, and seat type, so I won't quote a number here. " +
+    "I've flagged you for a callback — our admission counsellor will call within 30 minutes with the exact figures. " +
+    "Meanwhile, let's continue:",
+  HINGLISH:
+    "📞 Fees ke baare mein — woh aapki category, branch aur seat type pe depend karta hai, isliye main yahaan number nahi bata sakta. " +
+    "Maine aapko callback ke liye flag kar diya hai — hamare admission counsellor 30 minute mein call karke exact figures bataenge. " +
+    "Tab tak yeh continue karte hain:",
+  HINDI:
+    "📞 फीस के बारे में — यह आपकी category, branch और seat type पर निर्भर करता है, इसलिए main yahaan कोई number नहीं बता सकता। " +
+    "मैंने आपको callback के लिए flag कर दिया है — हमारे admission counsellor 30 minute में call करके exact figures बताएंगे। " +
+    "तब तक यह continue करते हैं:",
+};
 
 const LANGUAGE_PICKER_TEXT =
   'Welcome! 👋\n' +
@@ -362,6 +377,11 @@ async function finalizeLead(session) {
   finalLead.is_mature = !!session.wants_call || interest.score >= 8;
   if (session.wants_call) finalLead.call_requested_at = new Date();
 
+  // Carry price-inquiry signal onto the lead so the app can show the badge
+  finalLead.price_inquiry = !!session.price_inquiry;
+  finalLead.price_inquiry_at = session.price_inquiry_at || null;
+  finalLead.price_inquiry_count = session.price_inquiry_count || 0;
+
   const reply = buildCompletionReply(session, finalLead);
 
   session.completed = true;
@@ -519,6 +539,16 @@ async function processMessageInner(phone_number, rawMessage) {
     session.wants_call = true;
   }
 
+  // Price inquiry — auto-flag for high-priority callback, never disclose price in chat
+  const priceJustAsked = mentionsPrice(message);
+  if (priceJustAsked) {
+    session.wants_call = true;
+    session.price_inquiry = true;
+    session.price_inquiry_at = new Date();
+    session.price_inquiry_count = (session.price_inquiry_count || 0) + 1;
+    logger.info(`Price inquiry detected [${phone_number}]: "${message}" — auto-flagged for callback`);
+  }
+
   // Step 8: explicit answer to call question -> finalize
   if (session.current_step === CALL_STEP) {
     if (isYes(message)) session.wants_call = true;
@@ -590,6 +620,12 @@ async function processMessageInner(phone_number, rawMessage) {
   }
 
   if (!reply) reply = FALLBACK_QUESTIONS[session.language_mode]?.[1] || 'Could you share a bit more?';
+
+  // Prepend price deflection if user just asked about cost — never reveal numbers in chat
+  if (priceJustAsked) {
+    const deflection = PRICE_DEFLECTION[session.language_mode] || PRICE_DEFLECTION.ENGLISH;
+    reply = `${deflection}\n\n${reply}`;
+  }
 
   session.history.push({ role: 'assistant', content: reply });
   session.last_options = options;

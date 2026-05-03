@@ -32,6 +32,11 @@ const sessionSchema = new mongoose.Schema(
     last_options: { type: [String], default: [] },
     wants_call: { type: Boolean, default: false },
 
+    // Price-inquiry tracking (set by mentionsPrice detection)
+    price_inquiry: { type: Boolean, default: false },
+    price_inquiry_at: { type: Date },
+    price_inquiry_count: { type: Number, default: 0 },
+
     // Follow-up tracking
     last_user_message_at: { type: Date, default: Date.now, index: true },
     last_followup_at: { type: Date },
