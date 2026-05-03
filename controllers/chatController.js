@@ -124,7 +124,7 @@ const CALL_QUESTIONS = {
 
 const FALLBACK_QUESTIONS = {
   ENGLISH: {
-    0: "Hi 👋 I'm here to help you with **direct admission** for BTech in top Bangalore colleges (RVCE, BMSCE, PES, MSRIT, etc.) and SRM Chennai. I'll ask a few quick questions so I can guide you on the best route.",
+    0: 'Hi 👋\nLooking for Engineering Admissions in Bangalore or SRM Chennai?',
     1: 'Which college are you most interested in?',
     2: 'Which BTech branch are you planning for?',
     3: 'Which city are you from?',
@@ -134,7 +134,7 @@ const FALLBACK_QUESTIONS = {
     7: 'Please share your name so I can note your details.',
   },
   HINGLISH: {
-    0: 'Hi 👋 Main yahaan hoon **direct admission** ke liye — BTech mein Bangalore ke top colleges (RVCE, BMSCE, PES, MSRIT) aur SRM Chennai ke liye. Kuch quick questions poochhunga taaki main best route guide kar sakun.',
+    0: 'Hi 👋\nBangalore ya SRM Chennai mein Engineering Admission dhoondh rahe ho?',
     1: 'Aap kis college mein interested ho?',
     2: 'Kaunsi BTech branch lena chahte ho?',
     3: 'Aap kis sheher se ho?',
@@ -144,7 +144,7 @@ const FALLBACK_QUESTIONS = {
     7: 'Apna naam share kar dijiye.',
   },
   HINDI: {
-    0: 'नमस्ते 👋 मैं यहाँ हूँ **direct admission** के लिए — BTech में Bangalore के top colleges (RVCE, BMSCE, PES, MSRIT) और SRM Chennai के लिए। कुछ छोटे सवाल पूछूँगा ताकि best route guide कर सकूँ।',
+    0: 'नमस्ते 👋\nBangalore या SRM Chennai में Engineering Admission ढूंढ रहे हैं?',
     1: 'आप किस college में interested हैं?',
     2: 'कौन सी BTech branch करना चाहते हैं?',
     3: 'आप किस शहर से हैं?',

@@ -57,6 +57,9 @@ function buildFilter(query) {
   if (query.wants_call === 'true' || query.wants_call === '1') {
     filter.wants_call = true;
   }
+  if (query.price_inquiry === 'true' || query.price_inquiry === '1') {
+    filter.price_inquiry = true;
+  }
   if (query.score) {
     const scores = String(query.score).toUpperCase().split(',').filter(Boolean);
     if (scores.length) filter.lead_score = { $in: scores };
@@ -206,26 +209,64 @@ router.get('/leads.csv', async (req, res) => {
     const leads = await Lead.find(filter).sort({ created_at: -1 }).lean();
 
     const headers = [
-      'created_at', 'name', 'phone_number', 'course_interest',
-      'colleges_interested', 'admission_timeline', 'exam_status',
-      'lead_score', 'probability', 'language_mode', 'summary',
+      'created_at',
+      'name',
+      'phone_number',
+      'course_interest',
+      'branch',
+      'colleges_interested',
+      'city',
+      'pcm_percentage',
+      'admission_timeline',
+      'exam_status',
+      'lead_score',
+      'probability',
+      'is_mature',
+      'wants_call',
+      'price_inquiry',
+      'price_inquiry_count',
+      'interest_score',
+      'interest_level',
+      'interest_signals',
+      'language_mode',
+      'summary',
     ];
+
     const escape = (v) => {
       if (v === null || v === undefined) return '';
+      if (v instanceof Date) return v.toISOString();
+      if (typeof v === 'boolean') return v ? 'true' : 'false';
       const s = Array.isArray(v) ? v.join('; ') : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const rows = leads.map((l) => headers.map((h) => escape(l[h])).join(','));
-    const csv = [headers.join(','), ...rows].join('\n');
 
-    res.set('Content-Type', 'text/csv');
-    res.set('Content-Disposition', `attachment; filename="leads-${Date.now()}.csv"`);
+    const rows = leads.map((l) => headers.map((h) => escape(l[h])).join(','));
+    // BOM so Excel opens UTF-8 correctly (Hindi names render right)
+    const csv = '﻿' + [headers.join(','), ...rows].join('\n');
+
+    res.set('Content-Type', 'text/csv; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="${buildExportFilename(req.query, leads.length)}"`);
     res.send(csv);
   } catch (err) {
     logger.error(`leads.csv error: ${err.message}`);
     res.status(500).send('failed to export');
   }
 });
+
+// Builds a descriptive filename like "leads-HIGH-mature-since-2026-04-01-42rows.csv"
+function buildExportFilename(query, count) {
+  const parts = ['leads'];
+  if (query.score) parts.push(String(query.score).replace(/,/g, '+'));
+  if (query.mature === 'true' || query.mature === '1') parts.push('mature');
+  if (query.wants_call === 'true' || query.wants_call === '1') parts.push('wantscall');
+  if (query.price_inquiry === 'true' || query.price_inquiry === '1') parts.push('pricequery');
+  if (query.q) parts.push('search-' + String(query.q).slice(0, 20).replace(/[^a-z0-9]/gi, ''));
+  if (query.since) parts.push('since-' + String(query.since).slice(0, 10));
+  if (query.until) parts.push('until-' + String(query.until).slice(0, 10));
+  parts.push(`${count}rows`);
+  parts.push(new Date().toISOString().slice(0, 10));
+  return parts.join('-') + '.csv';
+}
 
 /**
  * HTML dashboard.
@@ -247,6 +288,10 @@ router.get('/', async (req, res) => {
     const score = (req.query.score || '').toUpperCase();
     const q = req.query.q || '';
     const since = req.query.since || '';
+    const until = req.query.until || '';
+    const mature = req.query.mature === 'true' || req.query.mature === '1';
+    const wantsCall = req.query.wants_call === 'true' || req.query.wants_call === '1';
+    const priceInquiry = req.query.price_inquiry === 'true' || req.query.price_inquiry === '1';
 
     const rows = leads.map((l) => `
       <tr class="row-${l.lead_score}">
@@ -288,7 +333,11 @@ router.get('/', async (req, res) => {
     form.filters { background: white; padding: 14px 24px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border-top: 1px solid #e5e7eb; border-bottom: 1px solid #e5e7eb; }
     form.filters input, form.filters select { padding: 7px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; }
     form.filters button { padding: 7px 14px; border: none; border-radius: 6px; background: #0b5cff; color: white; font-weight: 500; cursor: pointer; }
-    form.filters a { color: #0b5cff; text-decoration: none; font-size: 14px; margin-left: auto; }
+    form.filters a.export { color: white; background: #047857; padding: 7px 14px; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 500; margin-left: auto; }
+    form.filters a.reset { color: #6b7280; text-decoration: none; font-size: 13px; }
+    form.filters label.from-to { font-size: 12px; color: #6b7280; display: flex; align-items: center; gap: 6px; }
+    form.filters label.chk { display: flex; align-items: center; gap: 5px; font-size: 13px; color: #374151; cursor: pointer; padding: 6px 10px; border: 1px solid #e5e7eb; border-radius: 6px; background: #f9fafb; }
+    form.filters label.chk input { margin: 0; }
     table { width: 100%; border-collapse: collapse; background: white; }
     th, td { padding: 10px 12px; text-align: left; font-size: 13px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
     th { background: #f9fafb; font-weight: 600; color: #374151; position: sticky; top: 0; }
@@ -326,9 +375,14 @@ router.get('/', async (req, res) => {
       <option value="LOW" ${score === 'LOW' ? 'selected' : ''}>LOW only</option>
     </select>
     <input type="text" name="q" placeholder="Search name, college, course…" value="${escapeHtml(q)}">
-    <input type="date" name="since" value="${escapeHtml(since)}">
+    <label class="from-to">From <input type="date" name="since" value="${escapeHtml(since)}"></label>
+    <label class="from-to">To <input type="date" name="until" value="${escapeHtml(until)}"></label>
+    <label class="chk"><input type="checkbox" name="mature" value="true" ${mature ? 'checked' : ''}> ⭐ Mature</label>
+    <label class="chk"><input type="checkbox" name="wants_call" value="true" ${wantsCall ? 'checked' : ''}> 📞 Wants call</label>
+    <label class="chk"><input type="checkbox" name="price_inquiry" value="true" ${priceInquiry ? 'checked' : ''}> 💰 Asked price</label>
     <button type="submit">Filter</button>
-    <a href="/admin/leads.csv?${exportQs}">⬇ Export CSV</a>
+    <a class="reset" href="/admin/">Reset</a>
+    <a class="export" href="/admin/leads.csv?${exportQs}">⬇ Export CSV (${leads.length} rows)</a>
   </form>
 
   ${leads.length === 0 ? '<div class="empty">No leads match the current filters.</div>' : `
