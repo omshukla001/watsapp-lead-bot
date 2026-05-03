@@ -44,69 +44,42 @@ function pingDashboardWebhook(lead) {
  *   9 complete
  */
 
-// Top 10 Bangalore engineering colleges (separated from SRM Chennai per request)
-const BLR_TOP_10 = [
-  'RVCE',
-  'BMSCE',
-  'PES University',
-  'MSRIT',
-  'Dayananda Sagar',
-  'RNSIT',
-  'NMIT',
-  'CMRIT',
-  'BMSIT',
-  'SJBIT',
-];
+// Top Bangalore engineering colleges (kept tight — 4 most-asked + SRM)
+const BLR_TOP = ['RVCE', 'BMSCE', 'PES University', 'MSRIT'];
 
-const COLLEGE_OPTIONS = [
-  ...BLR_TOP_10,
-  'SRM Chennai',
-  'Multiple colleges',
-  'Other',
-];
+const COLLEGE_OPTIONS = [...BLR_TOP, 'SRM Chennai', 'Other'];
 
-// Sectioned for WhatsApp list message — keeps Bangalore separate from SRM Chennai
+// Sectioned for WhatsApp list — keeps Bangalore separate
 const COLLEGE_SECTIONS = [
-  { title: 'Top 10 Bangalore', items: BLR_TOP_10 },
-  { title: 'Other Cities', items: ['SRM Chennai'] },
-  { title: 'More', items: ['Multiple colleges', 'Other'] },
+  { title: 'Top Bangalore', items: BLR_TOP },
+  { title: 'More', items: ['SRM Chennai', 'Other'] },
 ];
 
 const BRANCH_OPTIONS = [
   'Computer Science (CSE)',
-  'Information Technology (IT)',
-  'AI & Machine Learning',
-  'Data Science',
-  'Electronics & Communication (ECE)',
-  'Electrical (EEE)',
-  'Mechanical',
-  'Civil',
+  'AI & ML / Data Science',
+  'Electronics (ECE)',
+  'Mechanical / Civil',
   'Other',
 ];
 
 const CITY_OPTIONS = [
   'Bangalore',
   'Hyderabad',
-  'Chennai',
-  'Mumbai',
   'Delhi NCR',
-  'Pune',
-  'Kolkata',
+  'Mumbai',
   'Other',
 ];
 
 const PCM_OPTIONS = [
-  '95-100%',
-  '90-94%',
-  '85-89%',
-  '80-84%',
+  '90%+',
+  '80-89%',
   '70-79%',
-  '60-69%',
-  'Below 60%',
+  'Below 70%',
   'Awaiting result',
 ];
 
-const EXAM_OPTIONS = ['KCET', 'COMEDK', 'JEE', 'Multiple exams', 'None yet'];
+const EXAM_OPTIONS = ['KCET / COMEDK', 'JEE', 'None yet'];
 
 const TIMELINE_OPTIONS = {
   ENGLISH: ['Within 1 month', '1-3 months', '3-6 months', 'Just exploring'],
@@ -244,83 +217,11 @@ function captureFallbackAnswer(session, message) {
 
 function buildCompletionReply(session, lead) {
   const lang = session.language_mode || 'ENGLISH';
-  const cols = (lead.colleges_interested || []).join(', ') || 'your shortlisted colleges';
-  const hasColleges = (lead.colleges_interested || []).length > 0;
-
-  const band = {
-    ENGLISH: {
-      HIGH: 'You have a strong profile. We can guide you with the best possible admission routes.',
-      MEDIUM: 'You have a decent profile. With the right guidance, we can help you shortlist suitable colleges.',
-      LOW: "You're still exploring, which is completely fine. I can help you understand the admission process and options.",
-    },
-    HINGLISH: {
-      HIGH: 'Aapka profile strong hai. Hum best admission routes guide kar sakte hain.',
-      MEDIUM: 'Aapka profile decent hai. Sahi guidance ke saath hum suitable colleges shortlist karne mein madad karenge.',
-      LOW: 'Aap abhi explore kar rahe ho, koi baat nahi. Main admission process aur options samajhne mein help kar sakta hoon.',
-    },
-    HINDI: {
-      HIGH: 'आपकी profile strong है। हम best admission routes में guide करेंगे।',
-      MEDIUM: 'आपकी profile decent है। सही guidance के साथ हम suitable colleges shortlist करने में मदद करेंगे।',
-      LOW: 'आप अभी explore कर रहे हैं, कोई बात नहीं। मैं admission process और options समझने में मदद कर सकता हूँ।',
-    },
-  }[lang][lead.lead_score] || '';
-
-  const callConfirm = lead.wants_call
-    ? {
-        ENGLISH: '📞 Perfect — our admission team will reach out shortly.',
-        HINGLISH: '📞 Perfect — hamari admission team jaldi hi aapko call karegi.',
-        HINDI: '📞 बढ़िया — हमारी admission team जल्दी ही आपको call करेगी।',
-      }[lang]
-    : '';
-
-  const mgmtLine = hasColleges
-    ? {
-        ENGLISH: `We can help you with **direct admission** in ${cols} — our team will guide you on the exact process.`,
-        HINGLISH: `Hum ${cols} mein **direct admission** mein madad kar sakte hain — hamari team aapko exact process guide karegi.`,
-        HINDI: `हम ${cols} में **direct admission** में मदद कर सकते हैं — हमारी team आपको exact process guide करेगी।`,
-      }[lang]
-    : {
-        ENGLISH: 'Our admission team can guide you through **direct admission** options in top colleges.',
-        HINGLISH: 'Hamari admission team aapko top colleges mein **direct admission** options guide karegi.',
-        HINDI: 'हमारी admission team आपको top colleges में **direct admission** options guide करेगी।',
-      }[lang];
-
-  const branchUrgency = (lead.branch || '').toLowerCase();
-  const isPremiumBranch =
-    branchUrgency.includes('cse') ||
-    branchUrgency.includes('computer') ||
-    branchUrgency.includes('ai') ||
-    branchUrgency.includes('ml') ||
-    branchUrgency.includes('data science') ||
-    branchUrgency.includes('information technology');
-
-  const branchPart = lead.branch ? ` ${lead.branch}` : '';
-
-  const urgencyLine = isPremiumBranch
-    ? {
-        ENGLISH: `🚨 Direct admission for ${cols}${branchPart} is going on RIGHT NOW and seats are filling fast — premium branches like CSE / AI-ML close within days. Please make a quick decision so we can lock your spot before it's gone.`,
-        HINGLISH: `🚨 ${cols}${branchPart} mein direct admission abhi chal raha hai aur seats jaldi bhar rahi hain — CSE / AI-ML jaisi premium branches kuch din mein hi close ho jaati hain. Please jaldi decision lijiye taaki hum aapka spot lock kar saken.`,
-        HINDI: `🚨 ${cols}${branchPart} में direct admission अभी चल रहा है और seats जल्दी भर रही हैं — CSE / AI-ML जैसी premium branches कुछ ही दिनों में close हो जाती हैं। कृपया जल्दी decision लीजिए ताकि हम आपका spot lock कर सकें।`,
-      }[lang]
-    : {
-        ENGLISH: `🚨 Direct admission for ${cols} is going on RIGHT NOW and seats are filling fast every week. Please make a quick decision so we can secure your preferred branch.`,
-        HINGLISH: `🚨 ${cols} mein direct admission abhi chal raha hai aur seats har hafte jaldi bhar rahi hain. Please quick decision lijiye taaki hum aapki preferred branch secure kar saken.`,
-        HINDI: `🚨 ${cols} में direct admission अभी चल रहा है और seats हर हफ़्ते जल्दी भर रही हैं। कृपया quick decision लीजिए ताकि हम आपकी preferred branch secure कर सकें।`,
-      }[lang];
-
-  // Optional direct-call line — only shown when CONTACT_PHONE is set in .env
-  // and isn't a placeholder. Lets customers call without waiting for callback.
-  const rawContact = (process.env.CONTACT_PHONE || '').trim();
-  const isPlaceholder = !rawContact || /x{2,}/i.test(rawContact);
-  const contactLine = isPlaceholder
-    ? ''
-    : {
-        ENGLISH: `📞 You can also call us directly: ${rawContact}`,
-        HINGLISH: `📞 Aap directly bhi call kar sakte ho: ${rawContact}`,
-        HINDI: `📞 आप directly भी call कर सकते हैं: ${rawContact}`,
-      }[lang];
-
-  return [band, callConfirm, mgmtLine, urgencyLine, contactLine].filter(Boolean).join('\n');
+  return {
+    ENGLISH: '✅ Thanks! Our admission team will call you shortly to guide you on direct admission.',
+    HINGLISH: '✅ Shukriya! Hamari admission team aapko jaldi hi call karegi aur direct admission ka process guide karegi.',
+    HINDI: '✅ धन्यवाद! हमारी admission team आपको जल्दी call करेगी और direct admission process समझाएगी।',
+  }[lang];
 }
 
 function mergePartialLead(base, extracted) {
