@@ -1,3 +1,4 @@
+const axios = require('axios');
 const Session = require('../models/sessionModel');
 const Lead = require('../models/leadModel');
 const aiService = require('../services/aiService');
@@ -6,6 +7,27 @@ const { notifyNewLead } = require('../services/termuxNotify');
 const { isYes, isNo, mentionsCall, mentionsPrice } = require('../services/maturityDetector');
 const { score: scoreInterest } = require('../services/interestScorer');
 const logger = require('../utils/logger');
+
+// Fire-and-forget POST to the dashboard API so it can push-notify counsellors.
+// Never blocks the WhatsApp reply; logs failures and moves on.
+function pingDashboardWebhook(lead) {
+  const url = process.env.DASHBOARD_API_URL;
+  const secret = process.env.BOT_WEBHOOK_SECRET;
+  if (!url || !secret) return; // not configured — skip silently
+
+  axios
+    .post(`${url.replace(/\/$/, '')}/api/webhook/lead-mature`, lead, {
+      headers: { 'X-Bot-Secret': secret, 'Content-Type': 'application/json' },
+      timeout: 4000,
+    })
+    .then((res) => {
+      logger.info(`Dashboard webhook OK [${lead.phone_number}] status=${res.status}`);
+    })
+    .catch((err) => {
+      const status = err.response?.status;
+      logger.warn(`Dashboard webhook failed [${lead.phone_number}]${status ? ' status=' + status : ''}: ${err.message}`);
+    });
+}
 
 /**
  * Step machine (BTech-only):
@@ -403,6 +425,7 @@ async function finalizeLead(session) {
   console.log(JSON.stringify(finalLead, null, 2));
   console.log('====================================\n');
   try { notifyNewLead(finalLead); } catch (_) {}
+  pingDashboardWebhook(finalLead);
 
   try {
     await session.save();
