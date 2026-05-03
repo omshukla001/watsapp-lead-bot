@@ -5,6 +5,7 @@ const aiService = require('../services/aiService');
 const { extractJSON, validateLead, scoreLead } = require('../utils/parser');
 const { notifyNewLead } = require('../services/termuxNotify');
 const { isYes, isNo, mentionsCall, mentionsPrice } = require('../services/maturityDetector');
+const { isValidWhatsAppPhone } = require('../services/baileysService');
 const { score: scoreInterest } = require('../services/interestScorer');
 const logger = require('../utils/logger');
 
@@ -307,7 +308,19 @@ function buildCompletionReply(session, lead) {
         HINDI: `🚨 ${cols} में direct admission अभी चल रहा है और seats हर हफ़्ते जल्दी भर रही हैं। कृपया quick decision लीजिए ताकि हम आपकी preferred branch secure कर सकें।`,
       }[lang];
 
-  return [band, callConfirm, mgmtLine, urgencyLine].filter(Boolean).join('\n');
+  // Optional direct-call line — only shown when CONTACT_PHONE is set in .env
+  // and isn't a placeholder. Lets customers call without waiting for callback.
+  const rawContact = (process.env.CONTACT_PHONE || '').trim();
+  const isPlaceholder = !rawContact || /x{2,}/i.test(rawContact);
+  const contactLine = isPlaceholder
+    ? ''
+    : {
+        ENGLISH: `📞 You can also call us directly: ${rawContact}`,
+        HINGLISH: `📞 Aap directly bhi call kar sakte ho: ${rawContact}`,
+        HINDI: `📞 आप directly भी call कर सकते हैं: ${rawContact}`,
+      }[lang];
+
+  return [band, callConfirm, mgmtLine, urgencyLine, contactLine].filter(Boolean).join('\n');
 }
 
 function mergePartialLead(base, extracted) {
@@ -411,6 +424,12 @@ async function finalizeLead(session) {
   session.last_options = [];
   session.history.push({ role: 'assistant', content: reply });
 
+  if (!isValidWhatsAppPhone(finalLead.phone_number)) {
+    logger.warn(
+      `⚠️  Lead phone "${finalLead.phone_number}" looks suspicious (not standard ` +
+      `WhatsApp E.164). Saving anyway — investigate the JID source if this repeats.`
+    );
+  }
   try {
     await Lead.findOneAndUpdate(
       { phone_number: finalLead.phone_number },
@@ -445,6 +464,40 @@ async function finalizeLead(session) {
   };
 }
 
+// How long the bot stays silent after a human types in WhatsApp.
+const HUMAN_HANDOFF_MINUTES = parseInt(process.env.HUMAN_HANDOFF_MINUTES || '30', 10);
+
+/**
+ * Called by Baileys when the paired WhatsApp account sends a message that the
+ * bot didn't generate (i.e. a human typed it directly). Bumps bot_paused_until
+ * for that phone so subsequent customer messages get ignored by the bot.
+ */
+async function markHumanHandoff(phone_number, humanText) {
+  const session = await Session.findOne({ phone_number });
+  if (!session) {
+    // First contact is from the human side — create a placeholder so future
+    // customer messages know to stay silent.
+    const ph = new Session({
+      phone_number,
+      language_mode: 'ENGLISH',
+      current_step: -1,
+      partial_lead: {},
+      history: [],
+      last_options: [],
+      wants_call: false,
+      bot_paused_until: new Date(Date.now() + HUMAN_HANDOFF_MINUTES * 60_000),
+      last_human_message_at: new Date(),
+    });
+    ph.history.push({ role: 'assistant', content: `[human-typed] ${humanText || ''}` });
+    await ph.save();
+    return;
+  }
+  session.bot_paused_until = new Date(Date.now() + HUMAN_HANDOFF_MINUTES * 60_000);
+  session.last_human_message_at = new Date();
+  session.history.push({ role: 'assistant', content: `[human-typed] ${humanText || ''}` });
+  await session.save();
+}
+
 // Per-phone async queue: serializes message processing for the same user so
 // rapid back-to-back messages can't double-write the session document.
 const phoneLocks = new Map();
@@ -468,6 +521,20 @@ async function processMessage(phone_number, rawMessage) {
 
 async function processMessageInner(phone_number, rawMessage) {
   let session = await Session.findOne({ phone_number });
+
+  // Human handoff: if a human typed in WhatsApp recently, stay silent.
+  // Bumps last_user_message_at so follow-ups don't fire either.
+  if (session && session.bot_paused_until && session.bot_paused_until > new Date()) {
+    const minsLeft = Math.ceil((session.bot_paused_until - Date.now()) / 60000);
+    logger.info(`🤐 Bot paused [${phone_number}] — human handling (${minsLeft}m left). Skipping reply.`);
+    session.history.push({ role: 'user', content: rawMessage });
+    session.last_user_message_at = new Date();
+    session.followup_count = 0;
+    session.last_followup_at = null;
+    try { await session.save(); } catch (_) {}
+    return { reply: '', options: [], complete: false, paused: true };
+  }
+
   const isFirstTurn = !session;
 
   // First contact — send bilingual language picker, do not run AI yet
@@ -684,4 +751,4 @@ async function handleMessage(req, res) {
   }
 }
 
-module.exports = { handleMessage, processMessage };
+module.exports = { handleMessage, processMessage, markHumanHandoff };

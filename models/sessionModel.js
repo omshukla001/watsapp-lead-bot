@@ -41,6 +41,12 @@ const sessionSchema = new mongoose.Schema(
     last_user_message_at: { type: Date, default: Date.now, index: true },
     last_followup_at: { type: Date },
     followup_count: { type: Number, default: 0 },
+
+    // Human handoff — when set in the future, processMessage skips this session
+    // so the bot doesn't talk over the counsellor. Set automatically when a
+    // fromMe message that the bot didn't send arrives via Baileys.
+    bot_paused_until: { type: Date },
+    last_human_message_at: { type: Date },
   },
   { timestamps: true }
 );

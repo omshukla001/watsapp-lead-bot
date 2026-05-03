@@ -10,16 +10,60 @@ const {
 } = require('@whiskeysockets/baileys');
 
 const logger = require('../utils/logger');
-const { processMessage } = require('../controllers/chatController');
+const { processMessage, markHumanHandoff } = require('../controllers/chatController');
 
 const AUTH_DIR = path.join(__dirname, '..', 'auth');
 const SILENT_LOGGER = pino({ level: 'silent' });
 
 let sock = null;
 
+// Strip a JID like "919876543210@s.whatsapp.net" or "919876543210:5@s.whatsapp.net"
+// down to "+919876543210". Returns "" if the input doesn't end in s.whatsapp.net
+// (so @lid identifiers don't get treated as phone numbers).
 function jidToPhone(jid) {
-  const local = (jid || '').split('@')[0].split(':')[0];
+  if (!jid || typeof jid !== 'string') return '';
+  if (!jid.endsWith('@s.whatsapp.net')) return '';
+  const local = jid.split('@')[0].split(':')[0];
   return local ? `+${local}` : '';
+}
+
+// Extract the REAL E.164 phone number from a Baileys message.
+// Handles both legacy @s.whatsapp.net JIDs and the new @lid (Linked Identifier)
+// format that WhatsApp now uses for some users. With LIDs, the phone is in a
+// secondary field — try several known field names in order.
+function extractRealPhone(msg) {
+  if (!msg || !msg.key) return '';
+  const k = msg.key;
+
+  // 1. Direct remoteJid is a phone JID (most common case)
+  let phone = jidToPhone(k.remoteJid);
+  if (phone) return phone;
+
+  // 2. Newer Baileys: remoteJidAlt carries the phone JID when remoteJid is @lid
+  phone = jidToPhone(k.remoteJidAlt);
+  if (phone) return phone;
+
+  // 3. Sender phone JID (newer)
+  phone = jidToPhone(k.senderPn || msg.senderPn);
+  if (phone) return phone;
+
+  // 4. Participant phone JID (newer, for LID-based 1-on-1 chats)
+  phone = jidToPhone(k.participantPn || msg.participantPn);
+  if (phone) return phone;
+
+  // 5. Plain participant (common in groups, also sometimes in LID 1-on-1)
+  phone = jidToPhone(k.participant || msg.participant);
+  if (phone) return phone;
+
+  return '';
+}
+
+// E.164: + followed by 10-13 digits. Real WhatsApp accounts are 11-13
+// (India 12, US 11, UK 12). Garbage like Date.now() / random IDs from
+// dashboard seed scripts is 14+ digits and gets rejected.
+function isValidWhatsAppPhone(phone) {
+  if (!phone || typeof phone !== 'string') return false;
+  return /^\+[1-9]\d{9,12}$/.test(phone);
 }
 
 function extractText(message) {
@@ -55,10 +99,26 @@ function buildOptionText(reply, options) {
   return `${reply}\n\n${numbered}\n\n_Reply with a number or type your own answer_`;
 }
 
+// Last 200 message IDs the bot sent — used to distinguish bot's own outbound
+// messages (echoed back via fromMe) from messages a human typed in WhatsApp.
+const BOT_SENT_IDS = new Set();
+const BOT_SENT_MAX = 200;
+
+function rememberSentId(id) {
+  if (!id) return;
+  BOT_SENT_IDS.add(id);
+  if (BOT_SENT_IDS.size > BOT_SENT_MAX) {
+    // delete oldest insertion (Sets preserve insertion order)
+    const first = BOT_SENT_IDS.values().next().value;
+    BOT_SENT_IDS.delete(first);
+  }
+}
+
 async function sendReply(jid, reply, options) {
   if (!sock) return;
   const text = buildOptionText(reply, options);
-  await sock.sendMessage(jid, { text });
+  const sent = await sock.sendMessage(jid, { text });
+  rememberSentId(sent?.key?.id);
 }
 
 async function startBaileys() {
@@ -115,7 +175,6 @@ async function startBaileys() {
     for (const msg of event.messages || []) {
       try {
         if (!msg.message) continue;
-        if (msg.key.fromMe) continue;
 
         const jid = msg.key.remoteJid;
         if (!jid) continue;
@@ -123,11 +182,40 @@ async function startBaileys() {
         if (jid.endsWith('@g.us')) continue;
         if (jid.endsWith('@newsletter')) continue;
 
+        // fromMe = either the bot's own outbound (echo) OR a human typed in WhatsApp
+        if (msg.key.fromMe) {
+          if (BOT_SENT_IDS.has(msg.key.id)) {
+            // Bot's own message coming back through the upsert stream — ignore
+            continue;
+          }
+          // Human typed this message in WhatsApp directly — mark handoff for this jid
+          const phone = extractRealPhone(msg);
+          if (!phone) {
+            logger.warn(`Could not extract phone for human-handoff message. key=${JSON.stringify(msg.key)}`);
+            continue;
+          }
+          const text = extractText(msg.message);
+          logger.info(`👤 Human took over [${phone}]: ${text.slice(0, 80)}`);
+          try {
+            await markHumanHandoff(phone, text);
+          } catch (e) {
+            logger.error(`markHumanHandoff failed for ${phone}: ${e.message}`);
+          }
+          continue;
+        }
+
         const text = extractText(msg.message);
         if (!text) continue;
 
-        const phone = jidToPhone(jid);
-        if (!phone) continue;
+        const phone = extractRealPhone(msg);
+        if (!phone) {
+          // Couldn't find a real phone in any field — log details once and skip
+          logger.warn(
+            `Could not extract real phone from incoming message. ` +
+            `remoteJid=${jid} key=${JSON.stringify(msg.key)}`
+          );
+          continue;
+        }
 
         logger.info(`WA IN [${phone}]: ${text}`);
 
@@ -162,4 +250,4 @@ function getSocket() {
   return sock;
 }
 
-module.exports = { startBaileys, getSocket, sendReply };
+module.exports = { startBaileys, getSocket, sendReply, isValidWhatsAppPhone };
