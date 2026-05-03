@@ -83,28 +83,28 @@ const CALL_QUESTIONS = {
     'Based on your profile 👇\n\n' +
     'You have good chances for direct admission in top colleges.\n\n' +
     "We'll guide you with:\n" +
-    '✔️ Best options\n' +
-    '✔️ Fees & process\n' +
-    '✔️ Seat availability\n\n' +
-    '📞 Free 10-min expert call\n\n' +
+    '✅ Best options\n' +
+    '✅ Fees & process\n' +
+    '✅ Seat availability\n\n' +
+    '☎️ Free 10-min expert call\n\n' +
     'Get exact admission chances + next steps.',
   HINGLISH:
     'Aapke profile ke based pe 👇\n\n' +
     'Top colleges mein direct admission ke acche chances hain.\n\n' +
     'Hum guide karenge:\n' +
-    '✔️ Best options\n' +
-    '✔️ Fees aur process\n' +
-    '✔️ Seat availability\n\n' +
-    '📞 Free 10-min expert call\n\n' +
+    '✅ Best options\n' +
+    '✅ Fees aur process\n' +
+    '✅ Seat availability\n\n' +
+    '☎️ Free 10-min expert call\n\n' +
     'Sahi admission chances + next steps.',
   HINDI:
     'आपके profile के आधार पर 👇\n\n' +
     'Top colleges में direct admission के अच्छे chances हैं।\n\n' +
     'हम guide करेंगे:\n' +
-    '✔️ Best options\n' +
-    '✔️ Fees और process\n' +
-    '✔️ Seat availability\n\n' +
-    '📞 Free 10-min expert call\n\n' +
+    '✅ Best options\n' +
+    '✅ Fees और process\n' +
+    '✅ Seat availability\n\n' +
+    '☎️ Free 10-min expert call\n\n' +
     'सही admission chances + next steps.',
 };
 
@@ -161,6 +161,14 @@ const FALLBACK_QUESTIONS = {
 const LANG_PICK_STEP = -1; // pre-greeting: user must pick language
 const LAST_AI_STEP = 3; // step 3 (exam) is the last question
 const CALL_STEP = 4;     // step 4 = result + call CTA
+
+// Sent when a customer messages AFTER they've already completed the funnel.
+// Don't loop them through the questions again — just confirm the team will call.
+const POST_COMPLETION_REMINDER = {
+  ENGLISH: '✅ Got it. Our admission team will call you shortly. Anything urgent? Just share your preferred call time.',
+  HINGLISH: '✅ Theek hai. Hamari admission team aapko jaldi hi call karegi. Urgent ho to call ka preferred time bata dijiye.',
+  HINDI: '✅ ठीक है। हमारी admission team आपको जल्दी call करेगी। Urgent हो तो call का preferred time बता दीजिए।',
+};
 
 const PRICE_DEFLECTION = {
   ENGLISH:
@@ -597,16 +605,32 @@ async function processMessageInner(phone_number, rawMessage) {
     await flagLeadWantsCallMidFunnel(session, flagReason);
   }
 
-  // Step 8: explicit answer to call question -> finalize
+  // CALL_STEP — only finalize on explicit yes/no. Off-track input (price
+  // questions, random questions) falls through to the AI/fallback below
+  // which answers the question and re-asks the call CTA.
   if (session.current_step === CALL_STEP) {
-    if (isYes(message)) session.wants_call = true;
-    else if (isNo(message)) session.wants_call = false;
-    return await finalizeLead(session);
+    if (isYes(message)) {
+      session.wants_call = true;
+      return await finalizeLead(session);
+    }
+    if (isNo(message)) {
+      session.wants_call = false;
+      return await finalizeLead(session);
+    }
+    // Neither yes nor no — fall through to AI/fallback. AI will answer
+    // the user's off-track question and the system re-asks the CTA.
   }
 
   let reply = '';
   let options = [];
   let optionSections = null;
+
+  // Three modes — pick what the AI/fallback should do:
+  //   completed=true   → support mode (answer questions, don't advance, don't re-finalize)
+  //   CALL_STEP        → off-track at call CTA (answer + re-ask CTA, don't advance)
+  //   normal funnel    → advance steps as usual
+  const isPostCompletion = session.completed === true;
+  const isCallStepOffTrack = session.current_step === CALL_STEP && !isPostCompletion;
 
   try {
     const rawAI = await aiService.runTurn(session, message);
@@ -614,49 +638,75 @@ async function processMessageInner(phone_number, rawMessage) {
     if (!parsed) throw new Error('AI returned non-JSON output');
 
     reply = String(parsed.reply || '').trim();
-    const previousStep = session.current_step || 0;
-    if (Number.isInteger(parsed.next_step)) {
-      const proposed = parsed.next_step;
-      const allowed = Math.min(Math.max(proposed, previousStep), previousStep + 1);
-      if (proposed !== allowed) {
-        logger.warn(`AI proposed next_step=${proposed} from prev=${previousStep}; clamped to ${allowed}`);
-      }
-      session.current_step = allowed;
-    }
-    session.partial_lead = mergePartialLead(session.partial_lead || {}, parsed.extracted);
 
-    const finishedAllAIQs = parsed.complete === true || previousStep >= LAST_AI_STEP;
-
-    if (finishedAllAIQs) {
-      session.current_step = CALL_STEP;
-      reply = CALL_QUESTIONS[session.language_mode] || CALL_QUESTIONS.ENGLISH;
+    if (isPostCompletion) {
+      // AI answered the user's question. Don't advance, don't re-save lead.
+      // Fallback to canned reminder if AI returned empty.
+      if (!reply) reply = POST_COMPLETION_REMINDER[session.language_mode] || POST_COMPLETION_REMINDER.ENGLISH;
+      options = [];
+      optionSections = null;
+    } else if (isCallStepOffTrack) {
+      // AI answered off-track question; we re-append the call CTA so the user knows what to do.
+      const callReply = CALL_QUESTIONS[session.language_mode] || CALL_QUESTIONS.ENGLISH;
+      reply = reply ? `${reply}\n\n${callReply}` : callReply;
       options = optionsForStep(CALL_STEP, session.language_mode);
+      optionSections = null;
     } else {
-      options = optionsForStep(session.current_step, session.language_mode);
-      optionSections = sectionsForStep(session.current_step);
+      // Normal funnel: advance step from AI output (clamped to prev or prev+1)
+      const previousStep = session.current_step || 0;
+      if (Number.isInteger(parsed.next_step)) {
+        const proposed = parsed.next_step;
+        const allowed = Math.min(Math.max(proposed, previousStep), previousStep + 1);
+        if (proposed !== allowed) {
+          logger.warn(`AI proposed next_step=${proposed} from prev=${previousStep}; clamped to ${allowed}`);
+        }
+        session.current_step = allowed;
+      }
+      session.partial_lead = mergePartialLead(session.partial_lead || {}, parsed.extracted);
+
+      const finishedAllAIQs = parsed.complete === true || previousStep >= LAST_AI_STEP;
+      if (finishedAllAIQs) {
+        session.current_step = CALL_STEP;
+        reply = CALL_QUESTIONS[session.language_mode] || CALL_QUESTIONS.ENGLISH;
+        options = optionsForStep(CALL_STEP, session.language_mode);
+      } else {
+        options = optionsForStep(session.current_step, session.language_mode);
+        optionSections = sectionsForStep(session.current_step);
+      }
     }
   } catch (aiErr) {
     logger.error(`AI path failed: ${aiErr.message}. Falling back to scripted flow.`);
-    const table = FALLBACK_QUESTIONS[session.language_mode] || FALLBACK_QUESTIONS.ENGLISH;
-    const current = session.current_step || 0;
+    const lang = session.language_mode || 'ENGLISH';
 
-    captureFallbackAnswer(session, message);
-
-    if (isFirstTurn) {
-      reply = `${table[0]}\n\n${table[1]}`;
-      session.current_step = 1;
-      options = optionsForStep(1, session.language_mode);
-      optionSections = sectionsForStep(1);
-    } else if (current < LAST_AI_STEP) {
-      const nextStep = current + 1;
-      reply = table[nextStep];
-      session.current_step = nextStep;
-      options = optionsForStep(nextStep, session.language_mode);
-      optionSections = sectionsForStep(nextStep);
+    if (isPostCompletion) {
+      // No AI — just send the canned reminder
+      reply = POST_COMPLETION_REMINDER[lang] || POST_COMPLETION_REMINDER.ENGLISH;
+      options = [];
+    } else if (isCallStepOffTrack) {
+      // No AI — just re-ask the call question
+      reply = CALL_QUESTIONS[lang] || CALL_QUESTIONS.ENGLISH;
+      options = optionsForStep(CALL_STEP, lang);
     } else {
-      session.current_step = CALL_STEP;
-      reply = CALL_QUESTIONS[session.language_mode] || CALL_QUESTIONS.ENGLISH;
-      options = optionsForStep(CALL_STEP, session.language_mode);
+      const table = FALLBACK_QUESTIONS[lang] || FALLBACK_QUESTIONS.ENGLISH;
+      const current = session.current_step || 0;
+      captureFallbackAnswer(session, message);
+
+      if (isFirstTurn) {
+        reply = `${table[0]}\n\n${table[1]}`;
+        session.current_step = 1;
+        options = optionsForStep(1, lang);
+        optionSections = sectionsForStep(1);
+      } else if (current < LAST_AI_STEP) {
+        const nextStep = current + 1;
+        reply = table[nextStep];
+        session.current_step = nextStep;
+        options = optionsForStep(nextStep, lang);
+        optionSections = sectionsForStep(nextStep);
+      } else {
+        session.current_step = CALL_STEP;
+        reply = CALL_QUESTIONS[lang] || CALL_QUESTIONS.ENGLISH;
+        options = optionsForStep(CALL_STEP, lang);
+      }
     }
   }
 

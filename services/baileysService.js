@@ -122,6 +122,10 @@ async function startBaileys() {
   const { version } = await fetchLatestBaileysVersion();
   logger.info(`Baileys starting (WA version ${version.join('.')})`);
 
+  // PAIR_PHONE_NUMBER set → use pairing-code flow (better on Termux than QR)
+  const pairPhone = (process.env.PAIR_PHONE_NUMBER || '').replace(/\D/g, '');
+  const usePairingCode = !!pairPhone && !state.creds.registered;
+
   sock = makeWASocket({
     version,
     auth: state,
@@ -134,13 +138,38 @@ async function startBaileys() {
 
   sock.ev.on('creds.update', saveCreds);
 
+  // Request pairing code right after socket init if PAIR_PHONE_NUMBER is set
+  if (usePairingCode) {
+    setTimeout(async () => {
+      try {
+        const code = await sock.requestPairingCode(pairPhone);
+        const formatted = code.match(/.{1,4}/g)?.join('-') || code;
+        console.log('\n========================================');
+        console.log('  PAIRING CODE METHOD (no QR needed)');
+        console.log('========================================');
+        console.log('  1. Open WhatsApp on phone ' + pairPhone);
+        console.log('  2. Settings → Linked Devices → Link a Device');
+        console.log('  3. Tap "Link with phone number instead"');
+        console.log('  4. Enter this code:');
+        console.log('');
+        console.log('         ' + formatted);
+        console.log('');
+        console.log('  (Code expires in ~60 seconds)');
+        console.log('========================================\n');
+      } catch (e) {
+        logger.error(`Pairing code request failed: ${e.message}. Falling back to QR.`);
+      }
+    }, 3000);
+  }
+
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr) {
+    if (qr && !usePairingCode) {
       console.log('\n========================================');
       console.log('  Scan this QR with WhatsApp on your phone');
       console.log('  WhatsApp -> Settings -> Linked Devices -> Link a Device');
+      console.log('  (Or use pairing code: set PAIR_PHONE_NUMBER in .env)');
       console.log('========================================\n');
       qrcode.generate(qr, { small: true });
     }
