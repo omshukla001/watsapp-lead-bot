@@ -381,29 +381,62 @@ const HUMAN_HANDOFF_MINUTES = parseInt(process.env.HUMAN_HANDOFF_MINUTES || '30'
  * for that phone so subsequent customer messages get ignored by the bot.
  */
 async function markHumanHandoff(phone_number, humanText) {
+  const now = new Date();
   const session = await Session.findOne({ phone_number });
+  const isFirstHandoff = !session?.last_human_message_at;
+
   if (!session) {
-    // First contact is from the human side — create a placeholder so future
-    // customer messages know to stay silent.
+    // Counsellor messaged a number that has no prior session yet — create
+    // placeholder so future customer messages know the counsellor is handling it.
     const ph = new Session({
       phone_number,
       language_mode: 'ENGLISH',
       current_step: -1,
       partial_lead: {},
-      history: [],
+      history: [{ role: 'human', content: humanText || '', at: now }],
       last_options: [],
       wants_call: false,
-      bot_paused_until: new Date(Date.now() + HUMAN_HANDOFF_MINUTES * 60_000),
-      last_human_message_at: new Date(),
+      bot_paused_until: new Date(now.getTime() + HUMAN_HANDOFF_MINUTES * 60_000),
+      last_human_message_at: now,
     });
-    ph.history.push({ role: 'assistant', content: `[human-typed] ${humanText || ''}` });
     await ph.save();
-    return;
+  } else {
+    session.bot_paused_until = new Date(now.getTime() + HUMAN_HANDOFF_MINUTES * 60_000);
+    session.last_human_message_at = now;
+    session.history.push({ role: 'human', content: humanText || '', at: now });
+    await session.save();
   }
-  session.bot_paused_until = new Date(Date.now() + HUMAN_HANDOFF_MINUTES * 60_000);
-  session.last_human_message_at = new Date();
-  session.history.push({ role: 'assistant', content: `[human-typed] ${humanText || ''}` });
-  await session.save();
+
+  // First-time handoff — also update the Lead doc (if one exists) and ping
+  // the dashboard so the app can flip the lead's status to "in progress".
+  if (isFirstHandoff && isValidWhatsAppPhone(phone_number)) {
+    try {
+      const updated = await Lead.findOneAndUpdate(
+        { phone_number },
+        {
+          $set: {
+            // mirrors lead_states.status semantics from the dashboard
+            interest_level: 'HIGH',
+            is_mature: true,
+          },
+        },
+        { new: true }
+      );
+      if (updated) {
+        pingDashboardWebhook({
+          phone_number,
+          name: updated.name,
+          colleges_interested: updated.colleges_interested,
+          handoff: true,
+          handoff_at: now.toISOString(),
+          handoff_first_message: humanText || '',
+        });
+        logger.info(`📲 Counsellor handoff webhook fired [${phone_number}]`);
+      }
+    } catch (err) {
+      logger.warn(`Handoff webhook update failed for ${phone_number}: ${err.message}`);
+    }
+  }
 }
 
 // Per-phone async queue: serializes message processing for the same user so

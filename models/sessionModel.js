@@ -2,7 +2,11 @@ const mongoose = require('mongoose');
 
 const messageSchema = new mongoose.Schema(
   {
-    role: { type: String, enum: ['user', 'assistant', 'system'], required: true },
+    // 'user' = lead's WhatsApp message
+    // 'assistant' = bot's reply
+    // 'human' = counsellor typed manually in WhatsApp (handoff)
+    // 'system' = internal notes
+    role: { type: String, enum: ['user', 'assistant', 'system', 'human'], required: true },
     content: { type: String, required: true },
     at: { type: Date, default: Date.now },
   },
