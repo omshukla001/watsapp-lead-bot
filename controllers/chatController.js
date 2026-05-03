@@ -5,7 +5,7 @@ const aiService = require('../services/aiService');
 const { extractJSON, validateLead, scoreLead } = require('../utils/parser');
 const { notifyNewLead } = require('../services/termuxNotify');
 const { isYes, isNo, mentionsCall, mentionsPrice } = require('../services/maturityDetector');
-const { isValidWhatsAppPhone } = require('../services/baileysService');
+const { isValidWhatsAppPhone } = require('../utils/phone');
 const { score: scoreInterest } = require('../services/interestScorer');
 const logger = require('../utils/logger');
 
@@ -44,42 +44,12 @@ function pingDashboardWebhook(lead) {
  *   9 complete
  */
 
-// Top Bangalore engineering colleges (kept tight — 4 most-asked + SRM)
-const BLR_TOP = ['RVCE', 'BMSCE', 'PES University', 'MSRIT'];
+const COLLEGE_OPTIONS = ['RVCE', 'BMSCE', 'PES', 'SRM', 'Other'];
+const COLLEGE_SECTIONS = null; // no sections — short list
 
-const COLLEGE_OPTIONS = [...BLR_TOP, 'SRM Chennai', 'Other'];
+const PCM_OPTIONS = ['90%+', '80–89%', '70–79%', 'Below 70%'];
 
-// Sectioned for WhatsApp list — keeps Bangalore separate
-const COLLEGE_SECTIONS = [
-  { title: 'Top Bangalore', items: BLR_TOP },
-  { title: 'More', items: ['SRM Chennai', 'Other'] },
-];
-
-const BRANCH_OPTIONS = [
-  'Computer Science (CSE)',
-  'AI & ML / Data Science',
-  'Electronics (ECE)',
-  'Mechanical / Civil',
-  'Other',
-];
-
-const CITY_OPTIONS = [
-  'Bangalore',
-  'Hyderabad',
-  'Delhi NCR',
-  'Mumbai',
-  'Other',
-];
-
-const PCM_OPTIONS = [
-  '90%+',
-  '80-89%',
-  '70-79%',
-  'Below 70%',
-  'Awaiting result',
-];
-
-const EXAM_OPTIONS = ['KCET / COMEDK', 'JEE', 'None yet'];
+const EXAM_OPTIONS = ['KCET/COMEDK', 'JEE', 'No'];
 
 const TIMELINE_OPTIONS = {
   ENGLISH: ['Within 1 month', '1-3 months', '3-6 months', 'Just exploring'],
@@ -96,64 +66,101 @@ const CALL_OPTIONS = {
 function optionsForStep(step, lang) {
   switch (step) {
     case 1: return COLLEGE_OPTIONS;
-    case 2: return BRANCH_OPTIONS;
-    case 3: return CITY_OPTIONS;
-    case 4: return PCM_OPTIONS;
-    case 5: return EXAM_OPTIONS;
-    case 6: return TIMELINE_OPTIONS[lang] || TIMELINE_OPTIONS.ENGLISH;
-    case 7: return [];
-    case 8: return CALL_OPTIONS[lang] || CALL_OPTIONS.ENGLISH;
+    case 2: return PCM_OPTIONS;
+    case 3: return EXAM_OPTIONS;
+    case 4: return CALL_OPTIONS[lang] || CALL_OPTIONS.ENGLISH;
     default: return [];
   }
 }
 
 function sectionsForStep(step) {
-  if (step === 1) return COLLEGE_SECTIONS;
-  return null;
+  return null; // short option lists — no need for sections
 }
 
+// Step 4 — sent after Q3 (exam). Result/positioning + call CTA combined.
 const CALL_QUESTIONS = {
-  ENGLISH: 'Last thing — would you like our admission team to give you a quick call about next steps?',
-  HINGLISH: 'Aakhri baat — kya aap chahte ho hamari admission team aapko ek quick call kare aur next steps samjhaye?',
-  HINDI: 'आख़िरी बात — क्या आप चाहेंगे कि हमारी admission team आपको call करके next steps समझाए?',
+  ENGLISH:
+    'Based on your profile 👇\n\n' +
+    'You have good chances for direct admission in top colleges.\n\n' +
+    "We'll guide you with:\n" +
+    '✔️ Best options\n' +
+    '✔️ Fees & process\n' +
+    '✔️ Seat availability\n\n' +
+    '📞 Free 10-min expert call\n\n' +
+    'Get exact admission chances + next steps.',
+  HINGLISH:
+    'Aapke profile ke based pe 👇\n\n' +
+    'Top colleges mein direct admission ke acche chances hain.\n\n' +
+    'Hum guide karenge:\n' +
+    '✔️ Best options\n' +
+    '✔️ Fees aur process\n' +
+    '✔️ Seat availability\n\n' +
+    '📞 Free 10-min expert call\n\n' +
+    'Sahi admission chances + next steps.',
+  HINDI:
+    'आपके profile के आधार पर 👇\n\n' +
+    'Top colleges में direct admission के अच्छे chances हैं।\n\n' +
+    'हम guide करेंगे:\n' +
+    '✔️ Best options\n' +
+    '✔️ Fees और process\n' +
+    '✔️ Seat availability\n\n' +
+    '📞 Free 10-min expert call\n\n' +
+    'सही admission chances + next steps.',
 };
 
+// New 3-question funnel:
+//   table[0] = entry hook   (sent on first turn before Q1)
+//   table[1] = Q1 — college (with hook prepended on first turn)
+//   table[2] = Q2 — PCM     (preceded by "Great choice" reinforcement)
+//   table[3] = Q3 — exam    (just the question)
 const FALLBACK_QUESTIONS = {
   ENGLISH: {
-    0: 'Hi 👋\nLooking for Engineering Admissions in Bangalore or SRM Chennai?',
-    1: 'Which college are you most interested in?',
-    2: 'Which BTech branch are you planning for?',
-    3: 'Which city are you from?',
-    4: 'What was your 12th PCM (Physics, Chemistry, Maths) percentage?',
-    5: 'Have you appeared for any entrance exams like KCET, COMEDK, or JEE?',
-    6: 'When are you planning to take admission?',
-    7: 'Please share your name so I can note your details.',
+    0:
+      'Hi 👋\n\n' +
+      'Confused about BTech admission?\n\n' +
+      'Get DIRECT ADMISSION in RVCE, BMSCE, PES, SRM — even with low rank.\n\n' +
+      'Seats filling fast ⚠️',
+    1: 'Which college?',
+    2:
+      'Great choice 👍\n\n' +
+      'Direct admission seats are limited.\n\n' +
+      'Let me check your chances 👇\n\n' +
+      'Your 12th PCM %?',
+    3: 'Any entrance exam?',
   },
   HINGLISH: {
-    0: 'Hi 👋\nBangalore ya SRM Chennai mein Engineering Admission dhoondh rahe ho?',
-    1: 'Aap kis college mein interested ho?',
-    2: 'Kaunsi BTech branch lena chahte ho?',
-    3: 'Aap kis sheher se ho?',
-    4: 'Aapka 12th PCM (Physics, Chemistry, Maths) percentage kya tha?',
-    5: 'Kya aapne KCET, COMEDK ya JEE jaisa entrance exam diya hai?',
-    6: 'Admission kab tak lena chahte ho?',
-    7: 'Apna naam share kar dijiye.',
+    0:
+      'Hi 👋\n\n' +
+      'BTech admission ke liye confused ho?\n\n' +
+      'RVCE, BMSCE, PES, SRM mein DIRECT ADMISSION pao — kam rank par bhi.\n\n' +
+      'Seats jaldi bhar rahi hain ⚠️',
+    1: 'Kaunsa college?',
+    2:
+      'Bahut accha choice 👍\n\n' +
+      'Direct admission seats limited hain.\n\n' +
+      'Aapke chances check karta hoon 👇\n\n' +
+      'Aapka 12th PCM %?',
+    3: 'Koi entrance exam diya hai?',
   },
   HINDI: {
-    0: 'नमस्ते 👋\nBangalore या SRM Chennai में Engineering Admission ढूंढ रहे हैं?',
-    1: 'आप किस college में interested हैं?',
-    2: 'कौन सी BTech branch करना चाहते हैं?',
-    3: 'आप किस शहर से हैं?',
-    4: 'आपका 12th PCM (Physics, Chemistry, Maths) percentage क्या था?',
-    5: 'क्या आपने KCET, COMEDK या JEE जैसा entrance exam दिया है?',
-    6: 'Admission कब तक लेना चाहते हैं?',
-    7: 'कृपया अपना नाम बता दीजिए।',
+    0:
+      'नमस्ते 👋\n\n' +
+      'BTech admission को लेकर confused हैं?\n\n' +
+      'RVCE, BMSCE, PES, SRM में DIRECT ADMISSION पाएँ — कम rank पर भी।\n\n' +
+      'Seats जल्दी भर रही हैं ⚠️',
+    1: 'कौन सा college?',
+    2:
+      'बहुत अच्छी choice 👍\n\n' +
+      'Direct admission seats limited हैं।\n\n' +
+      'आपके chances check करता हूँ 👇\n\n' +
+      'आपका 12th PCM %?',
+    3: 'कोई entrance exam दिया है?',
   },
 };
 
 const LANG_PICK_STEP = -1; // pre-greeting: user must pick language
-const LAST_AI_STEP = 7; // step 7 (name) is the last question the AI handles
-const CALL_STEP = 8;
+const LAST_AI_STEP = 3; // step 3 (exam) is the last question
+const CALL_STEP = 4;     // step 4 = result + call CTA
 
 const PRICE_DEFLECTION = {
   ENGLISH:
@@ -199,16 +206,8 @@ function captureFallbackAnswer(session, message) {
       p.colleges_interested = Array.from(new Set([...(p.colleges_interested || []), ...cols]));
       break;
     }
-    case 2: p.branch = text; break;
-    case 3: p.city = text; break;
-    case 4: p.pcm_percentage = text; break;
-    case 5: p.exam_status = text; break;
-    case 6: p.admission_timeline = text; break;
-    case 7: {
-      const m = text.match(/(?:my name is|i am|name[: ]+)?\s*([A-Za-z][A-Za-z\s.'-]{1,40})$/i);
-      p.name = (m && m[1] ? m[1] : text).trim();
-      break;
-    }
+    case 2: p.pcm_percentage = text; break;
+    case 3: p.exam_status = text; break;
   }
   p.course_interest = 'BTech';
   session.partial_lead = p;
@@ -403,6 +402,52 @@ async function markHumanHandoff(phone_number, humanText) {
 // rapid back-to-back messages can't double-write the session document.
 const phoneLocks = new Map();
 
+// Mid-funnel high-priority flag: customer said "call me" or asked about price
+// BEFORE finishing the funnel. Upserts a partial Lead doc so the app shows it
+// immediately as HOT, and pings the dashboard webhook for instant push.
+// Idempotent — only fires the FIRST time wants_call transitions to true.
+async function flagLeadWantsCallMidFunnel(session, reason) {
+  const phone = session.phone_number;
+  const partial = session.partial_lead || {};
+  const update = {
+    phone_number: phone,
+    course_interest: 'BTech',
+    name: partial.name || '',
+    branch: partial.branch || '',
+    colleges_interested: partial.colleges_interested || [],
+    city: partial.city || '',
+    pcm_percentage: partial.pcm_percentage || '',
+    exam_status: partial.exam_status || '',
+    admission_timeline: partial.admission_timeline || '',
+    wants_call: true,
+    is_mature: true,
+    call_requested_at: new Date(),
+    language_mode: session.language_mode || 'ENGLISH',
+    price_inquiry: !!session.price_inquiry,
+    price_inquiry_at: session.price_inquiry_at || null,
+    price_inquiry_count: session.price_inquiry_count || 0,
+    interest_level: 'HIGH',
+    summary: `[Mid-funnel] Wants call — reason: ${reason}. Step ${session.current_step}.`,
+  };
+
+  if (!isValidWhatsAppPhone(phone)) {
+    logger.warn(`⚠️  Skipping mid-funnel flag for invalid phone: "${phone}"`);
+    return;
+  }
+
+  try {
+    await Lead.findOneAndUpdate(
+      { phone_number: phone },
+      update,
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    logger.info(`📞 Lead flagged HOT mid-funnel [${phone}] reason=${reason} step=${session.current_step}`);
+    pingDashboardWebhook(update);
+  } catch (err) {
+    logger.error(`Mid-funnel lead flag failed for ${phone}: ${err.message}`);
+  }
+}
+
 async function processMessage(phone_number, rawMessage) {
   const previous = phoneLocks.get(phone_number) || Promise.resolve();
   const next = previous
@@ -526,8 +571,14 @@ async function processMessageInner(phone_number, rawMessage) {
   session.last_followup_at = null;
   logger.info(`IN  [${phone_number}] (${session.language_mode}) step=${session.current_step}: ${message}`);
 
+  // Track whether wants_call was already true before this turn — only fire the
+  // mid-funnel webhook the FIRST time it transitions to true.
+  const wasWantsCallBefore = !!session.wants_call;
+  let flagReason = null;
+
   if (mentionsCall(message)) {
     session.wants_call = true;
+    if (!wasWantsCallBefore) flagReason = 'mentionsCall';
   }
 
   // Price inquiry — auto-flag for high-priority callback, never disclose price in chat
@@ -538,6 +589,12 @@ async function processMessageInner(phone_number, rawMessage) {
     session.price_inquiry_at = new Date();
     session.price_inquiry_count = (session.price_inquiry_count || 0) + 1;
     logger.info(`Price inquiry detected [${phone_number}]: "${message}" — auto-flagged for callback`);
+    if (!wasWantsCallBefore && !flagReason) flagReason = 'priceInquiry';
+  }
+
+  // Fire mid-funnel HOT flag (lead → app + push notification) on first transition
+  if (flagReason && session.current_step !== CALL_STEP) {
+    await flagLeadWantsCallMidFunnel(session, flagReason);
   }
 
   // Step 8: explicit answer to call question -> finalize
@@ -571,13 +628,6 @@ async function processMessageInner(phone_number, rawMessage) {
     const finishedAllAIQs = parsed.complete === true || previousStep >= LAST_AI_STEP;
 
     if (finishedAllAIQs) {
-      if (!session.partial_lead.name) {
-        const m = String(message).match(/(?:my name is|i am|name[: ]+)?\s*([A-Za-z][A-Za-z\s.'-]{1,40})$/i);
-        if (m && m[1]) {
-          session.partial_lead.name = m[1].trim();
-          session.markModified('partial_lead');
-        }
-      }
       session.current_step = CALL_STEP;
       reply = CALL_QUESTIONS[session.language_mode] || CALL_QUESTIONS.ENGLISH;
       options = optionsForStep(CALL_STEP, session.language_mode);
