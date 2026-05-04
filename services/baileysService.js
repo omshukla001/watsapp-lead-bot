@@ -214,7 +214,10 @@ async function startBaileys() {
           // Human typed this message in WhatsApp directly — mark handoff for this jid
           const phone = extractRealPhone(msg);
           if (!phone) {
-            logger.warn(`Could not extract phone for human-handoff message. key=${JSON.stringify(msg.key)}`);
+            // Common case: customer's WhatsApp is on the new @lid format and
+            // Baileys can't resolve it to a phone. Bot still works for these
+            // chats (auto-replies); only the handoff trigger silently skips.
+            logger.debug(`Skip handoff (LID-only): ${msg.key?.remoteJid}`);
             continue;
           }
           const text = extractText(msg.message);
