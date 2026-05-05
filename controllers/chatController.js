@@ -71,8 +71,9 @@ function optionsForStep(step, lang) {
     case 2: return BRANCH_OPTIONS;
     case 3: return PCM_OPTIONS;
     case 4: return EXAM_OPTIONS;
-    case 5: return []; // NAME — free-text reply
-    case 6: return CALL_OPTIONS[lang] || CALL_OPTIONS.ENGLISH;
+    case 5: return TIMELINE_OPTIONS[lang] || TIMELINE_OPTIONS.ENGLISH;
+    case 6: return []; // NAME — free-text reply
+    case 7: return CALL_OPTIONS[lang] || CALL_OPTIONS.ENGLISH;
     default: return [];
   }
 }
@@ -110,12 +111,13 @@ const CALL_QUESTIONS = {
     'सही chances check करें?',
 };
 
-// 4-question funnel:
+// 5-question funnel:
 //   table[0] = entry hook   (sent on first turn before Q1)
-//   table[1] = Q1 — college (with hook prepended on first turn)
-//   table[2] = Q2 — branch  (free-text or numbered shortcut)
-//   table[3] = Q3 — PCM     (preceded by "Limited seats" reinforcement)
+//   table[1] = Q1 — college  (with hook prepended on first turn)
+//   table[2] = Q2 — branch   (free-text or numbered shortcut)
+//   table[3] = Q3 — PCM      (preceded by "Limited seats" reinforcement)
 //   table[4] = Q4 — exam
+//   table[5] = Q5 — timeline (admission planning window)
 const FALLBACK_QUESTIONS = {
   ENGLISH: {
     0:
@@ -127,6 +129,7 @@ const FALLBACK_QUESTIONS = {
     2: 'Great choice 👍\nAny preferred branch?',
     3: 'Limited seats — checking your chances 👇\nYour 12th PCM %?',
     4: 'Any entrance exam?',
+    5: 'When are you planning to take admission?',
   },
   HINGLISH: {
     0:
@@ -138,6 +141,7 @@ const FALLBACK_QUESTIONS = {
     2: 'Bahut accha choice 👍\nKoi preferred branch?',
     3: 'Limited seats — chances check kar raha hoon 👇\nAapka 12th PCM %?',
     4: 'Koi entrance exam diya hai?',
+    5: 'Admission kab tak lena chahte ho?',
   },
   HINDI: {
     0:
@@ -149,12 +153,13 @@ const FALLBACK_QUESTIONS = {
     2: 'बहुत अच्छी choice 👍\nकोई preferred branch?',
     3: 'Limited seats — chances check कर रहा हूँ 👇\nआपका 12th PCM %?',
     4: 'कोई entrance exam दिया है?',
+    5: 'Admission कब तक लेना है?',
   },
 };
 
-const LAST_AI_STEP = 4; // step 4 (exam) is the last funnel question
-const NAME_STEP = 5;     // step 5 = result message + ask for name (free text)
-const CALL_STEP = 6;     // step 6 = call CTA (yes/no)
+const LAST_AI_STEP = 5; // step 5 (timeline) is the last funnel question
+const NAME_STEP = 6;     // step 6 = result message + ask for name (free text)
+const CALL_STEP = 7;     // step 7 = call CTA (yes/no)
 
 // Sent when a customer messages AFTER they've already completed the funnel.
 // Don't loop them through the questions again — just confirm the team will call.
@@ -193,7 +198,8 @@ function captureFallbackAnswer(session, message) {
     case 2: p.branch = /^not sure$/i.test(text) ? '' : text; break;
     case 3: p.pcm_percentage = text; break;
     case 4: p.exam_status = text; break;
-    case 5: p.name = text; break;
+    case 5: p.admission_timeline = text; break;
+    case 6: p.name = text; break;
   }
   p.course_interest = 'BTech';
   session.partial_lead = p;

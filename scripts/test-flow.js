@@ -65,24 +65,30 @@ async function turn(label, userMsg) {
   if (t4.current_step !== 4) throw new Error(`expected step=4 (EXAM), got ${t4.current_step}`);
   if (!t4.reply.includes('Any entrance exam')) throw new Error('exam prompt missing');
 
-  // 5. Pick exam → advance to NAME (step 5)
+  // 5. Pick exam → ask TIMELINE (step 5)
   const t5 = await turn('Turn 5: pick exam via "1"', '1');
-  if (t5.current_step !== 5) throw new Error(`expected step=5 (NAME), got ${t5.current_step}`);
-  if (!t5.reply.includes('Great chances')) throw new Error('result line missing');
-  if (!t5.reply.includes('What is your name?')) throw new Error('name prompt missing');
-  if (t5.options.length !== 0) throw new Error(`NAME_STEP should have no options, got ${JSON.stringify(t5.options)}`);
+  if (t5.current_step !== 5) throw new Error(`expected step=5 (TIMELINE), got ${t5.current_step}`);
+  if (!t5.reply.toLowerCase().includes('admission')) throw new Error('timeline prompt missing');
+  if (!t5.options.includes('Within 1 month')) throw new Error('timeline options missing');
 
-  // 6. Provide name → advance to CALL (step 6)
-  const t6 = await turn('Turn 6: give name', 'Om Shukla');
-  if (t6.current_step !== 6) throw new Error(`expected step=6 (CALL), got ${t6.current_step}`);
-  if (!t6.reply.includes('Free 10-min call')) throw new Error('CTA missing');
-  if (!t6.reply.includes('Check your exact chances')) throw new Error('CTA tagline missing');
-  if (t6.options.length !== 2) throw new Error(`expected 2 options, got ${JSON.stringify(t6.options)}`);
+  // 6. Pick timeline → advance to NAME (step 6)
+  const t6 = await turn('Turn 6: pick timeline via "2"', '2');
+  if (t6.current_step !== 6) throw new Error(`expected step=6 (NAME), got ${t6.current_step}`);
+  if (!t6.reply.includes('Great chances')) throw new Error('result line missing');
+  if (!t6.reply.includes('What is your name?')) throw new Error('name prompt missing');
+  if (t6.options.length !== 0) throw new Error(`NAME_STEP should have no options, got ${JSON.stringify(t6.options)}`);
 
-  // 7. Yes → finalize
-  const t7 = await turn('Turn 7: yes to call', '1');
-  if (!t7.complete) throw new Error('expected complete=true');
-  if (!t7.lead) throw new Error('expected lead in result');
+  // 7. Provide name → advance to CALL (step 7)
+  const t7 = await turn('Turn 7: give name', 'Om Shukla');
+  if (t7.current_step !== 7) throw new Error(`expected step=7 (CALL), got ${t7.current_step}`);
+  if (!t7.reply.includes('Free 10-min call')) throw new Error('CTA missing');
+  if (!t7.reply.includes('Check your exact chances')) throw new Error('CTA tagline missing');
+  if (t7.options.length !== 2) throw new Error(`expected 2 options, got ${JSON.stringify(t7.options)}`);
+
+  // 8. Yes → finalize
+  const t8 = await turn('Turn 8: yes to call', '1');
+  if (!t8.complete) throw new Error('expected complete=true');
+  if (!t8.lead) throw new Error('expected lead in result');
 
   // Verify Mongo state
   const lead = await Lead.findOne({ phone_number: TEST_PHONE });
@@ -95,6 +101,7 @@ async function turn(label, userMsg) {
     branch: lead.branch,
     pcm_percentage: lead.pcm_percentage,
     exam_status: lead.exam_status,
+    admission_timeline: lead.admission_timeline,
     wants_call: lead.wants_call,
     is_mature: lead.is_mature,
     interest_level: lead.interest_level,
@@ -107,6 +114,7 @@ async function turn(label, userMsg) {
     ['branch === "CSE"', lead.branch === 'CSE'],
     ['pcm_percentage === "80–89%"', lead.pcm_percentage === '80–89%'],
     ['exam_status === "KCET/COMEDK"', lead.exam_status === 'KCET/COMEDK'],
+    ['admission_timeline === "1-3 months"', lead.admission_timeline === '1-3 months'],
     ['wants_call === true', lead.wants_call === true],
   ];
 
