@@ -47,6 +47,8 @@ function pingDashboardWebhook(lead) {
 const COLLEGE_OPTIONS = ['RVCE', 'BMSCE', 'PES', 'SRM', 'Other'];
 const COLLEGE_SECTIONS = null; // no sections — short list
 
+const BRANCH_OPTIONS = ['CSE', 'AI&ML', 'ECE', 'Mech', 'Not sure'];
+
 const PCM_OPTIONS = ['90%+', '80–89%', '70–79%', 'Below 70%'];
 
 const EXAM_OPTIONS = ['KCET/COMEDK', 'JEE', 'No'];
@@ -66,9 +68,11 @@ const CALL_OPTIONS = {
 function optionsForStep(step, lang) {
   switch (step) {
     case 1: return COLLEGE_OPTIONS;
-    case 2: return PCM_OPTIONS;
-    case 3: return EXAM_OPTIONS;
-    case 4: return CALL_OPTIONS[lang] || CALL_OPTIONS.ENGLISH;
+    case 2: return BRANCH_OPTIONS;
+    case 3: return PCM_OPTIONS;
+    case 4: return EXAM_OPTIONS;
+    case 5: return []; // NAME — free-text reply
+    case 6: return CALL_OPTIONS[lang] || CALL_OPTIONS.ENGLISH;
     default: return [];
   }
 }
@@ -77,42 +81,41 @@ function sectionsForStep(step) {
   return null; // short option lists — no need for sections
 }
 
-// Step 4 — sent after Q3 (exam). Result/positioning + call CTA combined.
-const CALL_QUESTIONS = {
+// Step 5 — sent after exam answer. Short result + ask for name as free text.
+const RESULT_AND_NAME_QUESTIONS = {
   ENGLISH:
-    'Based on your profile 👇\n\n' +
-    'You have good chances for direct admission in top colleges.\n\n' +
-    "We'll guide you with:\n" +
-    '✅ Best options\n' +
-    '✅ Fees & process\n' +
-    '✅ Seat availability\n\n' +
-    '☎️ Free 10-min expert call\n\n' +
-    'Get exact admission chances + next steps.',
+    'Great chances 👍\n' +
+    "We'll guide you with best options & next steps.\n\n" +
+    'What is your name?',
   HINGLISH:
-    'Aapke profile ke based pe 👇\n\n' +
-    'Top colleges mein direct admission ke acche chances hain.\n\n' +
-    'Hum guide karenge:\n' +
-    '✅ Best options\n' +
-    '✅ Fees aur process\n' +
-    '✅ Seat availability\n\n' +
-    '☎️ Free 10-min expert call\n\n' +
-    'Sahi admission chances + next steps.',
+    'Bahut acche chances 👍\n' +
+    'Best options aur next steps guide karenge.\n\n' +
+    'Aapka naam kya hai?',
   HINDI:
-    'आपके profile के आधार पर 👇\n\n' +
-    'Top colleges में direct admission के अच्छे chances हैं।\n\n' +
-    'हम guide करेंगे:\n' +
-    '✅ Best options\n' +
-    '✅ Fees और process\n' +
-    '✅ Seat availability\n\n' +
-    '☎️ Free 10-min expert call\n\n' +
-    'सही admission chances + next steps.',
+    'बहुत अच्छे chances 👍\n' +
+    'Best options और next steps guide करेंगे।\n\n' +
+    'आपका नाम क्या है?',
 };
 
-// New 3-question funnel:
+// Step 5 — sent after name is captured. Short call CTA.
+const CALL_QUESTIONS = {
+  ENGLISH:
+    'Free 10-min call 📞\n\n' +
+    'Check your exact chances?',
+  HINGLISH:
+    'Free 10-min call 📞\n\n' +
+    'Sahi chances check karein?',
+  HINDI:
+    'Free 10-min call 📞\n\n' +
+    'सही chances check करें?',
+};
+
+// 4-question funnel:
 //   table[0] = entry hook   (sent on first turn before Q1)
 //   table[1] = Q1 — college (with hook prepended on first turn)
-//   table[2] = Q2 — PCM     (preceded by "Great choice" reinforcement)
-//   table[3] = Q3 — exam    (just the question)
+//   table[2] = Q2 — branch  (free-text or numbered shortcut)
+//   table[3] = Q3 — PCM     (preceded by "Limited seats" reinforcement)
+//   table[4] = Q4 — exam
 const FALLBACK_QUESTIONS = {
   ENGLISH: {
     0:
@@ -121,12 +124,9 @@ const FALLBACK_QUESTIONS = {
       'Get DIRECT ADMISSION in RVCE, BMSCE, PES, SRM — even with low rank.\n\n' +
       'Seats filling fast ⚠️',
     1: 'Which college?',
-    2:
-      'Great choice 👍\n\n' +
-      'Direct admission seats are limited.\n\n' +
-      'Let me check your chances 👇\n\n' +
-      'Your 12th PCM %?',
-    3: 'Any entrance exam?',
+    2: 'Great choice 👍\nAny preferred branch?',
+    3: 'Limited seats — checking your chances 👇\nYour 12th PCM %?',
+    4: 'Any entrance exam?',
   },
   HINGLISH: {
     0:
@@ -135,12 +135,9 @@ const FALLBACK_QUESTIONS = {
       'RVCE, BMSCE, PES, SRM mein DIRECT ADMISSION pao — kam rank par bhi.\n\n' +
       'Seats jaldi bhar rahi hain ⚠️',
     1: 'Kaunsa college?',
-    2:
-      'Bahut accha choice 👍\n\n' +
-      'Direct admission seats limited hain.\n\n' +
-      'Aapke chances check karta hoon 👇\n\n' +
-      'Aapka 12th PCM %?',
-    3: 'Koi entrance exam diya hai?',
+    2: 'Bahut accha choice 👍\nKoi preferred branch?',
+    3: 'Limited seats — chances check kar raha hoon 👇\nAapka 12th PCM %?',
+    4: 'Koi entrance exam diya hai?',
   },
   HINDI: {
     0:
@@ -149,18 +146,15 @@ const FALLBACK_QUESTIONS = {
       'RVCE, BMSCE, PES, SRM में DIRECT ADMISSION पाएँ — कम rank पर भी।\n\n' +
       'Seats जल्दी भर रही हैं ⚠️',
     1: 'कौन सा college?',
-    2:
-      'बहुत अच्छी choice 👍\n\n' +
-      'Direct admission seats limited हैं।\n\n' +
-      'आपके chances check करता हूँ 👇\n\n' +
-      'आपका 12th PCM %?',
-    3: 'कोई entrance exam दिया है?',
+    2: 'बहुत अच्छी choice 👍\nकोई preferred branch?',
+    3: 'Limited seats — chances check कर रहा हूँ 👇\nआपका 12th PCM %?',
+    4: 'कोई entrance exam दिया है?',
   },
 };
 
-const LANG_PICK_STEP = -1; // pre-greeting: user must pick language
-const LAST_AI_STEP = 3; // step 3 (exam) is the last question
-const CALL_STEP = 4;     // step 4 = result + call CTA
+const LAST_AI_STEP = 4; // step 4 (exam) is the last funnel question
+const NAME_STEP = 5;     // step 5 = result message + ask for name (free text)
+const CALL_STEP = 6;     // step 6 = call CTA (yes/no)
 
 // Sent when a customer messages AFTER they've already completed the funnel.
 // Don't loop them through the questions again — just confirm the team will call.
@@ -185,24 +179,6 @@ const PRICE_DEFLECTION = {
     "तब तक यह continue करते हैं:",
 };
 
-const LANGUAGE_PICKER_TEXT =
-  'Welcome! 👋\n' +
-  'स्वागत है! 🙏\n\n' +
-  'Please choose your language to continue:\n' +
-  'कृपया अपनी भाषा चुनें:\n\n' +
-  '1️⃣  English\n' +
-  '2️⃣  हिन्दी\n\n' +
-  '_Reply with 1 or 2_';
-
-const LANGUAGE_PICKER_OPTIONS = ['English', 'हिन्दी'];
-
-function parseLanguagePick(message) {
-  const m = String(message || '').trim().toLowerCase();
-  if (/^(1|1️⃣|english|eng|e|angrezi|अंग्रेजी|english\.?)$/i.test(m)) return 'ENGLISH';
-  if (/^(2|2️⃣|hindi|hin|h|हिंदी|हिन्दी|हिन्दि)$/i.test(m)) return 'HINDI';
-  return null;
-}
-
 function captureFallbackAnswer(session, message) {
   const text = String(message || '').trim();
   if (!text) return;
@@ -214,8 +190,10 @@ function captureFallbackAnswer(session, message) {
       p.colleges_interested = Array.from(new Set([...(p.colleges_interested || []), ...cols]));
       break;
     }
-    case 2: p.pcm_percentage = text; break;
-    case 3: p.exam_status = text; break;
+    case 2: p.branch = /^not sure$/i.test(text) ? '' : text; break;
+    case 3: p.pcm_percentage = text; break;
+    case 4: p.exam_status = text; break;
+    case 5: p.name = text; break;
   }
   p.course_interest = 'BTech';
   session.partial_lead = p;
@@ -524,76 +502,66 @@ async function processMessageInner(phone_number, rawMessage) {
 
   const isFirstTurn = !session;
 
-  // First contact — send bilingual language picker, do not run AI yet
+  // First contact — send entry hook + Q1 directly (no language picker).
   if (!session) {
+    const lang = 'ENGLISH';
+    const table = FALLBACK_QUESTIONS[lang];
+    const reply = `${table[0]}\n\n${table[1]}`;
+    const options = optionsForStep(1, lang);
     session = new Session({
       phone_number,
-      language_mode: 'ENGLISH',
-      current_step: LANG_PICK_STEP,
+      language_mode: lang,
+      current_step: 1,
       partial_lead: {},
       history: [],
-      last_options: LANGUAGE_PICKER_OPTIONS,
+      last_options: options,
       wants_call: false,
     });
     session.history.push({ role: 'user', content: rawMessage });
-    session.history.push({ role: 'assistant', content: LANGUAGE_PICKER_TEXT });
+    session.history.push({ role: 'assistant', content: reply });
     session.last_user_message_at = new Date();
     await session.save();
-    logger.info(`New session [${phone_number}] — sent language picker`);
+    logger.info(`New session [${phone_number}] — sent entry hook + Q1`);
     return {
-      reply: LANGUAGE_PICKER_TEXT,
-      options: LANGUAGE_PICKER_OPTIONS,
-      optionSections: null,
+      reply,
+      options,
+      optionSections: sectionsForStep(1),
       complete: false,
-      language_mode: 'ENGLISH',
-      current_step: LANG_PICK_STEP,
+      language_mode: lang,
+      current_step: 1,
       lead: null,
       is_mature: false,
     };
   }
 
-  // Awaiting language pick — handle "1"/"2"/"english"/"hindi", else re-prompt
-  if (session.current_step === LANG_PICK_STEP) {
-    const picked = parseLanguagePick(rawMessage);
-    session.history.push({ role: 'user', content: rawMessage });
+  // NAME_STEP — capture user's free-text reply as their name, then ask call CTA.
+  if (session.current_step === NAME_STEP) {
+    const name = String(rawMessage || '').trim();
+    session.history.push({ role: 'user', content: name });
     session.last_user_message_at = new Date();
     session.followup_count = 0;
     session.last_followup_at = null;
-
-    if (!picked) {
-      session.history.push({ role: 'assistant', content: LANGUAGE_PICKER_TEXT });
-      session.last_options = LANGUAGE_PICKER_OPTIONS;
-      await session.save();
-      logger.info(`Language pick unrecognized [${phone_number}]: "${rawMessage}" — re-prompting`);
-      return {
-        reply: LANGUAGE_PICKER_TEXT,
-        options: LANGUAGE_PICKER_OPTIONS,
-        optionSections: null,
-        complete: false,
-        language_mode: session.language_mode,
-        current_step: LANG_PICK_STEP,
-        lead: null,
-        is_mature: false,
-      };
+    if (name) {
+      session.partial_lead = { ...(session.partial_lead || {}), name };
+      session.markModified('partial_lead');
     }
-
-    session.language_mode = picked;
-    session.current_step = 1;
-    const table = FALLBACK_QUESTIONS[picked] || FALLBACK_QUESTIONS.ENGLISH;
-    const reply = `${table[0]}\n\n${table[1]}`;
-    const options = optionsForStep(1, picked);
-    const optionSections = sectionsForStep(1);
+    session.current_step = CALL_STEP;
+    const lang = session.language_mode || 'ENGLISH';
+    const reply = CALL_QUESTIONS[lang] || CALL_QUESTIONS.ENGLISH;
+    const options = optionsForStep(CALL_STEP, lang);
     session.history.push({ role: 'assistant', content: reply });
     session.last_options = options;
+    logger.info(
+      `OUT [${phone_number}] (${lang}) step=${CALL_STEP} (name="${name}") -> ${reply.replace(/\n/g, ' | ')}`
+    );
     await session.save();
-    logger.info(`Language picked [${phone_number}]: ${picked}`);
     return {
       reply,
       options,
-      optionSections,
+      optionSections: null,
       complete: false,
-      language_mode: picked,
-      current_step: 1,
+      language_mode: lang,
+      current_step: CALL_STEP,
       lead: null,
       is_mature: false,
     };
@@ -699,9 +667,9 @@ async function processMessageInner(phone_number, rawMessage) {
 
       const finishedAllAIQs = parsed.complete === true || previousStep >= LAST_AI_STEP;
       if (finishedAllAIQs) {
-        session.current_step = CALL_STEP;
-        reply = CALL_QUESTIONS[session.language_mode] || CALL_QUESTIONS.ENGLISH;
-        options = optionsForStep(CALL_STEP, session.language_mode);
+        session.current_step = NAME_STEP;
+        reply = RESULT_AND_NAME_QUESTIONS[session.language_mode] || RESULT_AND_NAME_QUESTIONS.ENGLISH;
+        options = optionsForStep(NAME_STEP, session.language_mode);
       } else {
         options = optionsForStep(session.current_step, session.language_mode);
         optionSections = sectionsForStep(session.current_step);
@@ -736,9 +704,9 @@ async function processMessageInner(phone_number, rawMessage) {
         options = optionsForStep(nextStep, lang);
         optionSections = sectionsForStep(nextStep);
       } else {
-        session.current_step = CALL_STEP;
-        reply = CALL_QUESTIONS[lang] || CALL_QUESTIONS.ENGLISH;
-        options = optionsForStep(CALL_STEP, lang);
+        session.current_step = NAME_STEP;
+        reply = RESULT_AND_NAME_QUESTIONS[lang] || RESULT_AND_NAME_QUESTIONS.ENGLISH;
+        options = optionsForStep(NAME_STEP, lang);
       }
     }
   }
